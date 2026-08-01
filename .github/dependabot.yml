@@ -1,0 +1,24 @@
+# =============================================================================
+# Dependabot Configuration
+# =============================================================================
+# Keeps GitHub Actions versions up to date.
+# The Mailpit image is not tracked here — it uses the floating :latest tag;
+# update with `docker compose pull`.
+# =============================================================================
+
+version: 2
+updates:
+  # GitHub Actions updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "06:30"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "dependabot"
+    commit-message:
+      prefix: "chore(ci)"

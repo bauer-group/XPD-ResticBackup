@@ -1,0 +1,45 @@
+# =============================================================================
+# XPD-MailTesting - Release Workflow
+# =============================================================================
+# Triggers:
+#   - Push to main branch (excluding docs/markdown changes)
+#   - Manual dispatch with force-release option
+#
+# This workflow creates semantic releases without validation.
+# For validation, use separate CI workflows.
+# =============================================================================
+
+name: 🚀 Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.github/**'
+      - '*.md'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      force-release:
+        description: 'force create release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # ============================================
+  # Release Job
+  # ============================================
+
+  release:
+    name: 📦 Create Semantic Release
+    uses: bauer-group/automation-templates/.github/workflows/modules-semantic-release.yml@main
+    with:
+      target-branch: 'main'
+      dry-run: false
+      force-release: ${{ inputs.force-release || false }}
+    secrets: inherit
