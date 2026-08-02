@@ -1,0 +1,17 @@
+[
+  {
+    "Name": "acme-shop",
+    "Status": "running(3)",
+    "ConfigFiles": "/opt/acme-shop/docker-compose.yml,/opt/acme-shop/docker-compose.override.yml"
+  },
+  {
+    "Name": "metrics",
+    "Status": "running(2)",
+    "ConfigFiles": "/opt/metrics/compose.yaml"
+  },
+  {
+    "Name": "legacy-wiki",
+    "Status": "exited(1)",
+    "ConfigFiles": "/var/docker/legacy-wiki/docker-compose.yml"
+  }
+]

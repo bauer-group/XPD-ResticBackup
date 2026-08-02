@@ -1,0 +1,34 @@
+# =============================================================================
+# bg-backup integration rig - the host being backed up
+# =============================================================================
+# A DELIBERATELY BARE Ubuntu. The point of the installer test is that it works on
+# a machine where nothing is installed, so pre-installing curl, jq and gnupg here
+# would test a situation that does not occur.
+#
+# Only ca-certificates and curl are added, because without them the installer
+# cannot fetch anything at all - which is a bootstrap problem, not the thing
+# under test.
+# =============================================================================
+
+ARG UBUNTU_TAG=24.04
+FROM ubuntu:${UBUNTU_TAG}
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# The product under test, mounted at a path the e2e scripts know. SOURCE_DIR in
+# the installer makes it install from here rather than from GitHub, so the test
+# exercises the working tree and not the last release.
+COPY . /opt/bgb
+
+WORKDIR /opt/bgb
+ENV BGB_RIG_ROLE=victim
+
+# systemd is not PID 1 here. That is a deliberate limitation: the harness
+# verifies units with `systemd-analyze verify` rather than starting them, which
+# is what it can honestly prove. Starting timers is covered by the quarterly VM
+# rehearsal.
+CMD ["/bin/bash"]

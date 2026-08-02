@@ -1,0 +1,9 @@
+{"message_type":"status","percent_done":0,"total_files":18328,"total_bytes":734003200}
+{"message_type":"status","percent_done":0.12,"files_done":2199,"bytes_done":88080384,"current_files":["/srv/data/large.bin"]}
+{"message_type":"verbose_status","action":"new","item":"/srv/data/new-file.txt","duration":0.0021,"data_size":4096,"data_size_in_repo":1024,"metadata_size":128}
+{"message_type":"error","error":{"message":"open /var/lib/private/keyring.sock: permission denied"},"during":"archival","item":"/var/lib/private/keyring.sock"}
+{"message_type":"status","percent_done":0.48,"files_done":8797,"bytes_done":352321536}
+{"message_type":"verbose_status","action":"unchanged","item":"/etc/hosts","duration":0.0001}
+{"message_type":"error","error":{"message":"open /proc/12/task/12/fd/5: no such file or directory"},"during":"archival","item":"/proc/12/task/12/fd/5"}
+{"message_type":"status","percent_done":0.91,"files_done":16678,"bytes_done":667942912}
+{"message_type":"summary","files_new":812,"files_changed":94,"files_unmodified":17422,"dirs_new":63,"dirs_changed":18,"dirs_unmodified":1204,"data_blobs":903,"tree_blobs":81,"data_added":268435456,"data_added_packed":201326592,"total_files_processed":18328,"total_bytes_processed":734003200,"total_duration":41.7,"snapshot_id":"3f7a1c9e5b2d4086a1c7e9f30b5d6284c19af7e3b0d84c6215fa93e7dc408b51"}

@@ -1,0 +1,41 @@
+# =============================================================================
+# bg-backup integration rig - the recovery host
+# =============================================================================
+# A host that has NEVER seen the data. It gets:
+#
+#   * a bare Ubuntu
+#   * ca-certificates and curl, so the installer can run at all
+#   * the recovery credentials, through the environment
+#
+# It deliberately does NOT get the working tree. The recovery path must work
+# from the published installer and the recovery sheet alone - if the rehearsal
+# needs the source directory, the recovery story is incomplete and that is the
+# finding.
+#
+# The one exception is the e2e scripts themselves, which are the test harness
+# rather than part of the product.
+# =============================================================================
+
+ARG UBUNTU_TAG=24.04
+FROM ubuntu:${UBUNTU_TAG}
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Harness only. Note what is NOT copied: bin/, lib/, share/.
+COPY tests/e2e /opt/bgb/tests/e2e
+# The installer is copied because the rig has no network access to GitHub; on a
+# real recovery this is the `curl … | bash` one-liner from the recovery sheet.
+COPY install.sh /opt/bgb/install.sh
+COPY bin /opt/bgb/bin
+COPY lib /opt/bgb/lib
+COPY share /opt/bgb/share
+COPY VERSION /opt/bgb/VERSION
+
+WORKDIR /opt/bgb
+ENV BGB_RIG_ROLE=phoenix
+
+CMD ["/bin/bash"]

@@ -1,0 +1,89 @@
+[
+  {
+    "Id": "9f2c1a7b3e5d4086a1c7e9f30b5d6284c19af7e3b0d84c6215fa93e7dc408b51",
+    "Name": "/acme-shop-db-1",
+    "Image": "sha256:1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff001",
+    "State": {"Status": "running", "Health": {"Status": "healthy"}},
+    "Config": {
+      "Image": "postgres:16.4",
+      "Env": [
+        "POSTGRES_USER=acme",
+        "POSTGRES_DB=shop",
+        "PGDATA=/var/lib/postgresql/data/pgdata"
+      ],
+      "ExposedPorts": {"5432/tcp": {}},
+      "Labels": {
+        "com.docker.compose.project": "acme-shop",
+        "com.docker.compose.service": "db",
+        "com.docker.compose.project.working_dir": "/opt/acme-shop",
+        "com.docker.compose.project.config_files": "/opt/acme-shop/docker-compose.yml,/opt/acme-shop/docker-compose.override.yml",
+        "backup.bauer-group.com/tier": "critical"
+      }
+    },
+    "HostConfig": {
+      "RestartPolicy": {"Name": "unless-stopped"},
+      "PortBindings": {}
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "acme-shop_pgdata",
+        "Source": "/var/lib/docker/volumes/acme-shop_pgdata/_data",
+        "Destination": "/var/lib/postgresql/data",
+        "RW": true
+      },
+      {
+        "Type": "bind",
+        "Source": "/opt/acme-shop/initdb",
+        "Destination": "/docker-entrypoint-initdb.d",
+        "RW": false
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "acme-shop_default": {"IPAddress": "10.42.7.3"}
+      }
+    }
+  },
+  {
+    "Id": "4c8e0a1d6b7f2593e4a8c0d2f6b1e5a739c4d8f02b6e1a5c93d7f0b4e8a2c6d1",
+    "Name": "/acme-shop-web-1",
+    "Image": "sha256:aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+    "State": {"Status": "running", "Health": {"Status": "healthy"}},
+    "Config": {
+      "Image": "acme/shop-web:2.7.1",
+      "Env": ["NODE_ENV=production"],
+      "ExposedPorts": {"8080/tcp": {}},
+      "Labels": {
+        "com.docker.compose.project": "acme-shop",
+        "com.docker.compose.service": "web",
+        "com.docker.compose.project.working_dir": "/opt/acme-shop",
+        "com.docker.compose.project.config_files": "/opt/acme-shop/docker-compose.yml,/opt/acme-shop/docker-compose.override.yml"
+      }
+    },
+    "HostConfig": {
+      "RestartPolicy": {"Name": "unless-stopped"},
+      "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8080"}]}
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "acme-shop_uploads",
+        "Source": "/var/lib/docker/volumes/acme-shop_uploads/_data",
+        "Destination": "/app/uploads",
+        "RW": true
+      },
+      {
+        "Type": "bind",
+        "Source": "/srv/acme-shop/assets",
+        "Destination": "/app/public/assets",
+        "RW": false
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "acme-shop_default": {"IPAddress": "10.42.7.4"}
+      }
+    }
+  }
+]
