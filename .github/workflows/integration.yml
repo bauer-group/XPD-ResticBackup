@@ -106,11 +106,14 @@ jobs:
           echo "victim/phoenix base image: ubuntu:${BGB_UBUNTU_TAG}"
 
       - name: 🪣 Start MinIO rig
-        # `--wait` blocks until minio is healthy AND the one-shot minio-init has
-        # completed. Starting the victim before the bucket and policy exist
-        # produces a `restic init` failure that reads like a credentials
-        # problem, which is a genuinely expensive wrong turn.
-        run: docker compose up -d --wait minio minio-init
+        # NOT `docker compose up -d --wait minio minio-init`. --wait waits for a
+        # service to be RUNNING or HEALTHY, and a run-to-completion service can
+        # be neither: compose prints "container ...-minio-init-1 exited (0)" and
+        # returns 1 on a SUCCESSFUL init. Every integration run failed on that.
+        # up.sh waits for minio, then inspects the init container's exit code
+        # itself - and prints its log when it really did fail, which is the part
+        # --wait could never do.
+        run: bash tests/rig/up.sh
 
       - name: 🏗️ Build victim image
         run: docker compose build victim

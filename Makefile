@@ -55,7 +55,10 @@ test-unit: submodules ## Run the bats unit suite
 	$(BATS) --recursive tests/unit
 
 test-config: ## Validate the shipped example configuration
-	bash bin/bg-backup.sh --config share/config/bg-backup.conf.example config validate --strict
+	@# --no-perm-check: the example lives in the working tree and is owned by
+	@# whoever checked it out, not by root. The ownership gate guards the
+	@# SOURCING path on a real host, not a lint of a candidate file.
+	bash bin/bg-backup.sh --config share/config/bg-backup.conf.example config validate --strict --no-perm-check
 
 test: lint test-unit ## Hermetic gate: lint + unit tests (no Docker, no network)
 
@@ -64,7 +67,7 @@ check-all: lint format-check test-unit test-config ## Everything CI runs in ci.y
 # --- Integration rig (needs Docker) ------------------------------------------
 
 rig-up: ## Start the throwaway MinIO repository backend
-	$(COMPOSE) up -d --wait minio minio-init
+	BGB_UBUNTU_TAG=$(UBUNTU) bash tests/rig/up.sh
 
 rig-down: ## Stop the rig and delete its volumes
 	$(COMPOSE) down -v

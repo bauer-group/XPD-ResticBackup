@@ -651,20 +651,31 @@ cmd_config() {
 }
 
 config_cmd_validate() {
-  local strict=0 rc=0 f job
+  local strict=0 perms=1 rc=0 f job
   while [ $# -gt 0 ]; do
     case "$1" in
       --strict) strict=1; shift ;;
+      # Lint a file that is NOT the live configuration: check its syntax and its
+      # keys, but not its ownership and mode.
+      #
+      # The ownership gate exists because config files are SOURCED AS ROOT, so a
+      # file anyone can edit is a root shell for anyone. That reasoning does not
+      # apply to a candidate file in a working tree - and refusing it means the
+      # shipped examples can never be linted anywhere except on a configured
+      # host. CI checks out as uid 1001 and every run failed with
+      #     bg-backup.conf.example: must be owned by root (currently uid 1001)
+      # Never use this flag on ${BGB_CONFDIR}: there the gate is the point.
+      --no-perm-check) perms=0; shift ;;
       *) shift ;;
     esac
   done
 
   f="${BGB_CONFIG_FILE:-${BGB_CONFDIR}/bg-backup.conf}"
   if [ -f "${f}" ]; then
-    if ( config_require_perms "${f}" 0640 && config_lint "${f}" ) 2>/dev/null; then
+    if ( { [ "${perms}" -eq 0 ] || config_require_perms "${f}" 0640; } && config_lint "${f}" ) 2>/dev/null; then
       ok_mark "${f}"
     else
-      config_require_perms "${f}" 0640 || rc=1
+      [ "${perms}" -eq 1 ] && { config_require_perms "${f}" 0640 || rc=1; }
       config_lint "${f}" || rc=1
       bad_mark "${f}"
     fi

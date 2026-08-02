@@ -1,0 +1,21 @@
+# =============================================================================
+# actionlint configuration
+# =============================================================================
+# One suppression, and it is a linter-version problem rather than a workflow
+# problem: `models:` is a real GITHUB_TOKEN permission scope, required for the
+# token to reach GitHub Models. The actionlint build used by the shared workflow
+# module predates it and rejects the whole file with
+#
+#   unknown permission scope "models". all available permission scopes are
+#   "actions", "attestations", ... [permissions]
+#
+# which failed the release gate on every push. Dropping the scope instead would
+# make the AI issue summary receive a 401 and silently post nothing - trading a
+# loud, harmless lint error for a quiet, real one.
+#
+# Revisit when: the shared module ships an actionlint that knows `models:`.
+# Verify with: actionlint -version && actionlint .github/workflows/ai-issue-summary.yml
+paths:
+  .github/workflows/ai-issue-summary.yml:
+    ignore:
+      - 'unknown permission scope "models"'

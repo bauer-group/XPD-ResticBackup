@@ -1,0 +1,4 @@
+mode=docker-pause
+job=docker
+started=1
+ids=abc123 def456
