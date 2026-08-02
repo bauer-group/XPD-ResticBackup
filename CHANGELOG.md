@@ -1,3 +1,9 @@
+## [0.1.1](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.1.0...v0.1.1) (2026-08-02)
+
+### 🐛 Bug Fixes
+
+* **ci:** made the test scripts executable ([e2984f7](https://github.com/bauer-group/XPD-ResticBackup/commit/e2984f73f515075e11faebf1d77aa9a7dcfc59ca))
+
 ## [0.1.0](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.0.0...v0.1.0) (2026-08-02)
 
 ### 🚀 Features
