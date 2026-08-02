@@ -1,0 +1,207 @@
+---
+# =============================================================================
+# molecule verify: restic_backup
+# =============================================================================
+# Asserts the things that can be wrong without a network, and the two that would
+# be security bugs:
+#
+#   * no credential file is readable by anyone but root
+#   * the throwaway passphrase appears NOWHERE outside the credentials directory
+#
+# The second is the one worth having. A template that accidentally interpolates
+# a secret into bg-backup.conf (0640) or into a log would be invisible in review
+# and obvious here.
+# =============================================================================
+
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    passphrase: "molecule-throwaway-passphrase-do-not-use"
+    s3_secret: "molecule-throwaway-secret"
+
+  tasks:
+
+    # --- Layout -------------------------------------------------------------
+    - name: Stat the configuration tree
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: layout
+      loop:
+        - /etc/bg-backup
+        - /etc/bg-backup/conf.d
+        - /etc/bg-backup/credentials
+        - /etc/bg-backup/bg-backup.conf
+        - /etc/bg-backup/conf.d/system.conf
+        - /etc/bg-backup/conf.d/docker.conf
+        - /etc/bg-backup/credentials/repo.env
+        - /etc/bg-backup/credentials/repo.key
+
+    - name: Every expected path exists
+      ansible.builtin.assert:
+        that: item.stat.exists
+        fail_msg: "missing: {{ item.item }}"
+      loop: "{{ layout.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # --- Permissions --------------------------------------------------------
+    - name: The credentials directory is root-only
+      ansible.builtin.assert:
+        that:
+          - layout.results[2].stat.mode == '0700'
+          - layout.results[2].stat.pw_name == 'root'
+        fail_msg: >-
+          /etc/bg-backup/credentials is {{ layout.results[2].stat.mode }}, expected 0700
+
+    - name: Credential files are 0400 and root-owned
+      ansible.builtin.assert:
+        that:
+          - item.stat.mode == '0400'
+          - item.stat.pw_name == 'root'
+        fail_msg: "{{ item.item }} is {{ item.stat.mode }}, expected 0400"
+      loop: "{{ layout.results[6:8] }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: The main configuration is not world-readable
+      ansible.builtin.assert:
+        that: layout.results[3].stat.mode in ['0640', '0600', '0400']
+        fail_msg: >-
+          bg-backup.conf is {{ layout.results[3].stat.mode }};
+          bg-backup refuses anything more permissive than 0640
+
+    # --- No secret outside the credentials directory ------------------------
+    # The assertion this scenario exists for.
+    - name: Search for the passphrase outside the credentials directory
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -rl
+          - --exclude-dir=credentials
+          - "{{ passphrase }}"
+          - /etc/bg-backup
+          - /etc/systemd/system
+          - /var/log
+      register: leak_pass
+      changed_when: false
+      failed_when: false
+
+    - name: The passphrase appears nowhere outside credentials/
+      ansible.builtin.assert:
+        that: leak_pass.rc != 0
+        fail_msg: "passphrase leaked into: {{ leak_pass.stdout_lines | default([]) }}"
+
+    - name: Search for the S3 secret outside the credentials directory
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -rl
+          - --exclude-dir=credentials
+          - "{{ s3_secret }}"
+          - /etc/bg-backup
+          - /etc/systemd/system
+          - /var/log
+      register: leak_s3
+      changed_when: false
+      failed_when: false
+
+    - name: The S3 secret appears nowhere outside credentials/
+      ansible.builtin.assert:
+        that: leak_s3.rc != 0
+        fail_msg: "S3 secret leaked into: {{ leak_s3.stdout_lines | default([]) }}"
+
+    # --- Credentials reach systemd the right way ----------------------------
+    - name: Read the systemd drop-ins
+      ansible.builtin.find:
+        paths: /etc/systemd/system
+        patterns: "*.conf"
+        recurse: true
+        contains: "(LoadCredential|EnvironmentFile)"
+        use_regex: false
+      register: dropins
+
+    - name: Slurp any drop-in that mentions credentials
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      register: dropin_content
+      loop: "{{ dropins.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      when: dropins.files | length > 0
+
+    # EnvironmentFile= would expose the notifier tokens through
+    # `systemctl show -p Environment` to any local user. See docs/adr/0003.
+    - name: No drop-in uses EnvironmentFile for credentials
+      ansible.builtin.assert:
+        that: "'EnvironmentFile' not in (item.content | b64decode)"
+        fail_msg: >-
+          {{ item.item.path }} uses EnvironmentFile=; credentials must be passed
+          with LoadCredential= (docs/adr/0003)
+      loop: "{{ dropin_content.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.path | default('') }}"
+      when: dropin_content.results is defined
+
+    # --- Unit syntax --------------------------------------------------------
+    - name: systemd-analyze accepts the templated unit
+      ansible.builtin.command:
+        argv: [systemd-analyze, verify, /etc/systemd/system/bg-backup@.service]
+      register: unit_verify
+      changed_when: false
+      failed_when: unit_verify.rc != 0
+
+    # --- Nothing was started ------------------------------------------------
+    # test_mode must be inert. A scenario that silently armed a timer would give
+    # false confidence about what a converge does on a production host.
+    - name: List bg-backup timers
+      ansible.builtin.command:
+        argv: [systemctl, list-timers, --all, --no-legend, "bg-backup*"]
+      register: timers
+      changed_when: false
+      failed_when: false
+
+    - name: No timer was enabled in test mode
+      ansible.builtin.assert:
+        that: timers.stdout | trim | length == 0
+        fail_msg: "test_mode armed a timer: {{ timers.stdout }}"
+
+    - name: The product was not installed in test mode
+      ansible.builtin.stat:
+        path: /opt/bg-backup/current
+      register: prefix
+
+    - name: /opt/bg-backup/current is absent in test mode
+      ansible.builtin.assert:
+        that: not prefix.stat.exists
+        fail_msg: "test_mode installed the payload"
+
+    # --- Rendered content ---------------------------------------------------
+    - name: Slurp the rendered job definition
+      ansible.builtin.slurp:
+        src: /etc/bg-backup/conf.d/docker.conf
+      register: docker_job
+
+    - name: The docker job renders the expected settings
+      ansible.builtin.assert:
+        that:
+          - "'JOB_MODE=\"docker\"' in content"
+          - "'JOB_QUIESCE=\"docker-pause\"' in content"
+          - "'JOB_PARTIAL_IS_FAILURE=1' in content"
+        fail_msg: "unexpected docker job rendering"
+      vars:
+        content: "{{ docker_job.content | b64decode }}"
+
+    - name: Slurp the main configuration
+      ansible.builtin.slurp:
+        src: /etc/bg-backup/bg-backup.conf
+      register: main_conf
+
+    - name: The repository prefix is the legacy FQDN, verbatim
+      ansible.builtin.assert:
+        that: "'25000-040.cloud.bauer-group.com' in (main_conf.content | b64decode)"
+        fail_msg: >-
+          the legacy hostname was not carried through verbatim - the role must
+          never derive or normalise it (docs/ansible.md)

@@ -1,0 +1,146 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# =============================================================================
+# bg-backup - main configuration
+# =============================================================================
+# MANAGED BY ANSIBLE (role: restic_backup) - DO NOT EDIT ON THE HOST.
+# Every change here is overwritten on the next ansible-pull. Change the
+# inventory instead:  restic_backup_* in group_vars / host_vars.
+#
+# Rendered for {{ inventory_hostname }} from bg-backup {{ restic_backup_version }}.
+#
+# FORMAT: shell-sourced KEY=VALUE. bg-backup lints this file BEFORE sourcing
+# it: root-owned, mode 0640 or tighter, whitelisted keys only, no command
+# substitution. A key this template invents would abort every run with exit 4.
+# =============================================================================
+
+# --- Identity ----------------------------------------------------------------
+# Set explicitly rather than left empty (which would mean "call hostname -f at
+# runtime"). A host with a broken /etc/hosts would otherwise silently start a
+# second snapshot lineage under a different name: it stops matching
+# `forget --host`, so it is never pruned and never found by a restore by name.
+BGB_HOSTNAME="{{ restic_backup_hostname }}"
+
+# --- Repository --------------------------------------------------------------
+BGB_REPO_ENV="{{ restic_backup_repo_env }}"
+
+# primary|secondary - derived from restic_backup_prune_local.
+# Only a primary host may prune. Two hosts pruning one repository concurrently
+# remove pack files out from under each other.
+BGB_REPO_ROLE="{{ restic_backup_repo_role }}"
+
+{% if restic_backup_secondary_repo_base | length > 0 %}
+BGB_SECONDARY_REPO_ENV="{{ restic_backup_secondary_repo_env }}"
+{% else %}
+BGB_SECONDARY_REPO_ENV=""
+{% endif %}
+
+# --- Engine ------------------------------------------------------------------
+BGB_RESTIC_BIN="{{ restic_backup_restic_bin }}"
+BGB_RESTIC_MIN_VERSION="{{ restic_backup_restic_min_version }}"
+BGB_COMPRESSION="{{ restic_backup_compression }}"
+BGB_PACK_SIZE_MIB="{{ restic_backup_pack_size_mib }}"
+BGB_READ_CONCURRENCY="{{ restic_backup_read_concurrency }}"
+BGB_LIMIT_UPLOAD_KIB="{{ restic_backup_limit_upload_kib }}"
+BGB_LIMIT_DOWNLOAD_KIB="{{ restic_backup_limit_download_kib }}"
+
+# --- Paths -------------------------------------------------------------------
+BGB_CACHE_DIR="{{ restic_backup_statedir }}/cache"
+BGB_TMP_DIR="{{ restic_backup_statedir }}/tmp"
+BGB_STATE_DIR="{{ restic_backup_statedir }}/state"
+BGB_LOG_DIR="{{ restic_backup_logdir }}"
+
+# --- Runtime behaviour -------------------------------------------------------
+BGB_LOG_LEVEL="{{ restic_backup_log_level }}"
+BGB_UMASK="{{ restic_backup_umask }}"
+BGB_LOCK_WAIT_SECONDS="{{ restic_backup_lock_wait_seconds }}"
+BGB_PARALLEL_JOBS="{{ restic_backup_parallel_jobs }}"
+BGB_NICE="{{ restic_backup_nice }}"
+BGB_IONICE_CLASS="{{ restic_backup_ionice_class }}"
+BGB_IONICE_LEVEL="{{ restic_backup_ionice_level }}"
+BGB_RETRY_ATTEMPTS="{{ restic_backup_retry_attempts }}"
+BGB_RETRY_DELAY_SECONDS="{{ restic_backup_retry_delay_seconds }}"
+
+# --- Default retention -------------------------------------------------------
+BGB_DEFAULT_KEEP_LAST="{{ restic_backup_keep_last }}"
+BGB_DEFAULT_KEEP_DAILY="{{ restic_backup_keep_daily }}"
+BGB_DEFAULT_KEEP_WEEKLY="{{ restic_backup_keep_weekly }}"
+BGB_DEFAULT_KEEP_MONTHLY="{{ restic_backup_keep_monthly }}"
+BGB_DEFAULT_KEEP_YEARLY="{{ restic_backup_keep_yearly }}"
+BGB_DEFAULT_KEEP_WITHIN="{{ restic_backup_keep_within }}"
+BGB_KEEP_TAG="{{ restic_backup_keep_tag }}"
+
+# --- forget/prune safety rails -----------------------------------------------
+BGB_FORGET_MIN_SNAPSHOTS="{{ restic_backup_forget_min_snapshots }}"
+BGB_FORGET_MAX_DELETE_PERCENT="{{ restic_backup_forget_max_delete_percent }}"
+BGB_PRUNE_MAX_UNUSED="{{ restic_backup_prune_max_unused }}"
+
+# --- Defaults inherited by every job -----------------------------------------
+BGB_DEFAULT_EXCLUDE_FILE="{{ restic_backup_exclude_file }}"
+BGB_DEFAULT_EXCLUDE_CACHES="{{ 1 if restic_backup_exclude_caches | bool else 0 }}"
+BGB_DEFAULT_ONE_FILE_SYSTEM="{{ 1 if restic_backup_one_file_system | bool else 0 }}"
+BGB_DEFAULT_ALERT_MAX_AGE_HOURS="{{ restic_backup_alert_max_age_hours }}"
+
+# --- Monitoring --------------------------------------------------------------
+BGB_MONITOR_ON="{{ restic_backup_monitor_on }}"
+BGB_NOTIFIERS="{{ restic_backup_notifiers }}"
+BGB_MONITOR_TIMEOUT_SECONDS="{{ restic_backup_monitor_timeout_seconds }}"
+
+# NOTE - deliberately absent from this file:
+#     BGB_MONITOR_KUMA_PUSH_URL
+#     BGB_MONITOR_TEAMS_WEBHOOK_URL
+#     BGB_MONITOR_WEBHOOK_URL
+#
+# Those three are bearer credentials and live in
+# {{ restic_backup_notify_env }} (0400), which the units pull in through an
+# EnvironmentFile drop-in. bg-backup's precedence is
+#   defaults < this file < conf.d < ENVIRONMENT < flags
+# so the environment wins - but ONLY as long as this file does not assign the
+# key at all. Writing BGB_MONITOR_TEAMS_WEBHOOK_URL="" here would override the
+# environment with an empty string and silently disable the notifier.
+BGB_MONITOR_KUMA_MAINTENANCE="{{ 1 if restic_backup_kuma_maintenance | bool else 0 }}"
+BGB_MONITOR_KUMA_API_URL="{{ restic_backup_kuma_api_url }}"
+BGB_MONITOR_KUMA_MAINTENANCE_ID="{{ restic_backup_kuma_maintenance_id }}"
+BGB_MONITOR_MAIL_TO="{{ restic_backup_mail_to }}"
+BGB_MONITOR_MAIL_FROM="{{ restic_backup_mail_from }}"
+BGB_METRICS_TEXTFILE="{{ restic_backup_metrics_textfile }}"
+BGB_NOTIFY_INCLUDE_PATHS="{{ 1 if restic_backup_notify_include_paths | bool else 0 }}"
+
+# --- Maintenance schedules (systemd OnCalendar) ------------------------------
+BGB_CHECK_SCHEDULE="{{ restic_backup_check_schedule }}"
+BGB_CHECK_READ_DATA_SUBSET="{{ restic_backup_check_read_data_subset }}"
+{% if restic_backup_prune_local | bool %}
+BGB_PRUNE_SCHEDULE="{{ restic_backup_prune_schedule }}"
+{% else %}
+# Empty because restic_backup_prune_local is false: this host's backend
+# credential cannot delete repository objects, so a prune timer would fail
+# every single week and teach everyone to ignore backup alerts. Retention runs
+# off-host - see docs/ansible.md.
+BGB_PRUNE_SCHEDULE=""
+{% endif %}
+BGB_VERIFY_SCHEDULE="{{ restic_backup_verify_schedule }}"
+{% if restic_backup_secondary_repo_base | length > 0 %}
+BGB_COPY_SCHEDULE="{{ restic_backup_copy_schedule }}"
+{% else %}
+BGB_COPY_SCHEDULE=""
+{% endif %}
+BGB_MAINT_RANDOM_DELAY="{{ restic_backup_maint_random_delay }}"
+
+# --- Recovery bundle ---------------------------------------------------------
+BGB_ESCROW_URLS="{{ restic_backup_escrow_urls }}"
+BGB_ESCROW_LOCAL="{{ restic_backup_escrow_local }}"
+BGB_ESCROW_RECIPIENTS_FILE="{{ restic_backup_escrow_recipients_file }}"
+BGB_ESCROW_MAX_AGE_DAYS="{{ restic_backup_escrow_max_age_days }}"
+
+# --- Self-update -------------------------------------------------------------
+# The schedule stays empty on an Ansible-managed fleet. Which version a host
+# runs is decided in the inventory (restic_backup_version + digest), reviewed
+# once and rolled out deliberately - not by each host at 03:00 on its own.
+BGB_UPDATE_CHANNEL="{{ restic_backup_update_channel }}"
+BGB_UPDATE_SCHEDULE="{{ restic_backup_update_schedule }}"
+{% if restic_backup_extra_config | length > 0 %}
+
+# --- Inventory escape hatch (restic_backup_extra_config) ---------------------
+{% for key, value in restic_backup_extra_config | dictsort %}
+{{ key }}="{{ value }}"
+{% endfor %}
+{% endif %}

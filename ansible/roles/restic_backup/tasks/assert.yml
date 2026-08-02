@@ -1,0 +1,259 @@
+---
+# =============================================================================
+# restic_backup Role - Preconditions
+# =============================================================================
+# All checks are fail-fast. A backup role that converges "mostly" produces a
+# host that reports green and holds an incomplete history — the single worst
+# outcome available here. A failed converge is loud, cheap and fixable.
+# =============================================================================
+
+- name: "[restic_backup][assert] Operating system family is supported"
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['os_family'] == "Debian"
+    fail_msg: >-
+      bg-backup targets Ubuntu 22.04/24.04/26.04 and Debian 13 (the installer
+      uses apt and dpkg-query directly). This host reports os_family
+      '{{ ansible_facts["os_family"] }}'.
+    quiet: true
+
+- name: "[restic_backup][assert] Release is pinned by version and digest"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_version | length > 0
+      - restic_backup_release_checksum is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      restic_backup_version and restic_backup_release_checksum must both be
+      pinned. Set them in group_vars (sha256 of the release asset, lowercase
+      hex, no 'sha256:' prefix). An unpinned backup tool means a host can take
+      a new version on a routine ansible-pull, and the first thing you learn
+      about the change is a restore that does not work.
+    quiet: true
+  when: not (restic_backup_test_mode | bool)
+
+# --- Repository identity ----------------------------------------------------
+# NOTE: there is deliberately NO assertion on the SHAPE of the hostname.
+# Part of this fleet uses a legacy naming scheme (e.g.
+# 25000-040.cloud.bauer-group.com) that does not match the AAAA-GG convention.
+# Any regex here would reject exactly those hosts, and "fixing" it by deriving
+# a prefix from parsed hostname parts would write one host's snapshots into
+# another host's repository. inventory_hostname is used verbatim, full stop.
+- name: "[restic_backup][assert] Repository URL is set and ends with this host's prefix"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_repo_base | length > 0
+      - restic_backup_repository | length > 0
+      - restic_backup_repo_prefix | length > 0
+      - restic_backup_repository.split('/') | last == restic_backup_repo_prefix
+    fail_msg: >-
+      The repository URL must end with this host's own prefix
+      ('{{ restic_backup_repo_prefix }}'). Got '{{ restic_backup_repository }}'.
+      The bucket is shared across servers: a copied-and-pasted prefix is how
+      one host's retention silently deletes another host's snapshots. Set
+      restic_backup_repo_base (endpoint + bucket only) and let the role append
+      the prefix.
+    quiet: true
+
+- name: "[restic_backup][assert] Repository passphrase is present and long enough"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_password | length >= restic_backup_password_min_length
+    fail_msg: >-
+      restic_backup_password must be at least
+      {{ restic_backup_password_min_length }} characters. It comes from the
+      secrets role as secrets_restic_password — see docs/ansible.md. The
+      passphrase is the only thing standing between the bucket and the data,
+      and it can never be changed for snapshots already written.
+    quiet: true
+  no_log: true
+
+- name: "[restic_backup][assert] S3 backend credentials are present"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_s3_access_key | length > 0
+      - restic_backup_s3_secret_key | length > 0
+    fail_msg: >-
+      restic_backup_repository is an S3 repository but no backend credentials
+      were resolved. Provide secrets_restic_s3_access_key and
+      secrets_restic_s3_secret_key through the secrets role.
+    quiet: true
+  no_log: true
+  when: restic_backup_repository is match('^s3:')
+
+- name: "[restic_backup][assert] Secondary repository is fully specified when enabled"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_secondary_password | length >= restic_backup_password_min_length
+      - restic_backup_secondary_repository.split('/') | last == restic_backup_repo_prefix
+    fail_msg: >-
+      restic_backup_secondary_repo_base is set, so the secondary repository
+      needs its own passphrase and must use the same per-host prefix.
+    quiet: true
+  no_log: true
+  when: restic_backup_secondary_repo_base | length > 0
+
+# --- Destructive-operation policy -------------------------------------------
+- name: "[restic_backup][assert] Prune policy and repository role agree"
+  ansible.builtin.assert:
+    that:
+      - not (restic_backup_prune_local | bool) or restic_backup_repo_role == "primary"
+    fail_msg: >-
+      restic_backup_prune_local is true but restic_backup_repo_role resolved to
+      '{{ restic_backup_repo_role }}'. Only a primary host may prune: two hosts
+      pruning the same repository concurrently remove pack files out from under
+      each other. Do not override restic_backup_repo_role by hand.
+    quiet: true
+
+# --- Job model --------------------------------------------------------------
+- name: "[restic_backup][assert] At least one job is defined"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_jobs | length > 0
+    fail_msg: >-
+      restic_backup_jobs is empty. A host with bg-backup installed and no job
+      produces no snapshot and no alert — it looks healthy forever.
+    quiet: true
+
+- name: "[restic_backup][assert] Job names and order prefixes are unique"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_jobs | map(attribute='name') | list | unique | length == restic_backup_jobs | length
+      - restic_backup_jobs | map(attribute='order') | list | unique | length == restic_backup_jobs | length
+    fail_msg: >-
+      Job names and order prefixes must be unique — the file name in conf.d is
+      derived from both, so a duplicate silently overwrites another job's
+      definition instead of adding one.
+    quiet: true
+
+- name: "[restic_backup][assert] Job order prefixes fit the two-digit file naming"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_jobs | map(attribute='order') | select('lt', 0) | list | length == 0
+      - restic_backup_jobs | map(attribute='order') | select('gt', 99) | list | length == 0
+    fail_msg: >-
+      Job 'order' must be 0..99: conf.d entries are named NN-<job>.conf and the
+      tool strips exactly two leading digits to recover the job name.
+    quiet: true
+
+- name: "[restic_backup][assert] Collect every configured source path"
+  ansible.builtin.set_fact:
+    restic_backup_all_source_paths: >-
+      {{ (restic_backup_jobs | map(attribute='paths', default=[]) | flatten)
+         + (restic_backup_jobs | map(attribute='extra_paths', default=[]) | flatten)
+         + (restic_backup_jobs | map(attribute='config_paths', default=[]) | flatten)
+         + (restic_backup_jobs | map(attribute='docker_extra_paths', default=[]) | flatten) }}
+
+- name: "[restic_backup][assert] Source paths are absolute and free of shell metacharacters"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_all_source_paths | reject('match', '^/') | list | length == 0
+      - restic_backup_all_source_paths | select('search', '[$`]') | list | length == 0
+    fail_msg: >-
+      Every source path must be absolute and must not contain '$' or a
+      backtick. Job files are shell-sourced by bg-backup after a lint pass that
+      rejects command substitution outright — a path with a '$(' in it makes
+      every run of that job abort at exit 4.
+    quiet: true
+
+# =============================================================================
+# The --one-file-system trap
+# =============================================================================
+# restic's --one-file-system does two things: it stops the walk from wandering
+# into NFS mounts and container overlays (why we want it), and it SKIPS every
+# separate filesystem below the source path (why it is dangerous).
+#
+# On a Docker host with /var/lib/docker on its own LV or disk, a `system` job
+# rooted at / with one_file_system enabled backs up the OS and quietly omits
+# every named volume. The run exits 0. The snapshot looks healthy. Nobody finds
+# out until a restore.
+#
+# So: compare the mount point df reports for /var/lib/docker with the one it
+# reports for /. If they differ while one_file_system is on and no job lists
+# /var/lib/docker as an explicit source, fail the converge. A failed converge
+# is a five-minute fix; a silent half-backup is an outage with no way back.
+- name: "[restic_backup][assert] Look for a separate /var/lib/docker"
+  ansible.builtin.stat:
+    path: /var/lib/docker
+  register: restic_backup_docker_dir
+
+- name: "[restic_backup][assert] Read the filesystem backing /"
+  ansible.builtin.command:
+    cmd: df -P /
+  register: restic_backup_df_root
+  changed_when: false
+  check_mode: false
+  when: restic_backup_docker_dir.stat.exists | default(false)
+
+- name: "[restic_backup][assert] Read the filesystem backing /var/lib/docker"
+  ansible.builtin.command:
+    cmd: df -P /var/lib/docker
+  register: restic_backup_df_docker
+  changed_when: false
+  check_mode: false
+  when: restic_backup_docker_dir.stat.exists | default(false)
+
+- name: "[restic_backup][assert] Evaluate the --one-file-system exposure"
+  when: restic_backup_docker_dir.stat.exists | default(false)
+  block:
+    # df -P guarantees one physical line per filesystem (that is the entire
+    # point of -P), so line 2 is the record. split(None, 5) keeps a mount point
+    # containing spaces intact instead of truncating it at the first blank.
+    - name: "[restic_backup][assert] Extract both mount points"
+      ansible.builtin.set_fact:
+        restic_backup_root_mountpoint: "{{ restic_backup_df_root.stdout_lines[1].split(None, 5)[5] | trim }}"
+        restic_backup_docker_mountpoint: "{{ restic_backup_df_docker.stdout_lines[1].split(None, 5)[5] | trim }}"
+
+    - name: "[restic_backup][assert] Find jobs that would silently skip it"
+      ansible.builtin.set_fact:
+        restic_backup_ofs_risky_jobs: >-
+          {% set risky = [] %}
+          {% for job in restic_backup_jobs %}
+          {%   set ofs = job.one_file_system | default(restic_backup_one_file_system) %}
+          {%   set sources = (job.paths | default([])) + (job.extra_paths | default([])) %}
+          {%   if (job.mode | default('files')) == 'files' and ofs | bool
+                 and '/' in (job.paths | default([]))
+                 and '/var/lib/docker' not in sources %}
+          {%     set _ = risky.append(job.name) %}
+          {%   endif %}
+          {% endfor %}
+          {{ risky | join(',') }}
+
+    - name: "[restic_backup][assert] Refuse a half-backup of a Docker host"
+      ansible.builtin.assert:
+        that:
+          - restic_backup_ofs_risky_jobs | trim | length == 0
+        fail_msg: |
+          /var/lib/docker is a separate filesystem on {{ inventory_hostname }}
+          (mounted at '{{ restic_backup_docker_mountpoint }}', while / is
+          '{{ restic_backup_root_mountpoint }}'), and job(s)
+          '{{ restic_backup_ofs_risky_jobs | trim }}' back up / with
+          --one-file-system without naming it as a source.
+
+          restic would walk / and stop at that mount boundary. Every Docker
+          named volume and bind mount below it would be missing from the
+          snapshot, the run would exit 0, and the gap would only surface during
+          a restore.
+
+          Fix by adding the mount as an explicit source:
+
+            restic_backup_extra_paths:
+              - /var/lib/docker
+
+          or, if this host genuinely must not back that data up, set
+          restic_backup_one_file_system: false for the job and control the
+          scope with excludes instead.
+        quiet: true
+      when: restic_backup_docker_mountpoint != restic_backup_root_mountpoint
+
+# --- Escape hatch sanity ----------------------------------------------------
+- name: "[restic_backup][assert] Extra configuration keys are in bg-backup's whitelist"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_extra_config.keys() | reject('match', '^BGB_[A-Z0-9_]+$') | list | length == 0
+    fail_msg: >-
+      restic_backup_extra_config may only contain BGB_* keys. bg-backup lints
+      every configuration file before sourcing it and dies on an unknown key —
+      which means one typo here stops every backup on the host, not just the
+      setting you were adding.
+    quiet: true
+  when: restic_backup_extra_config | length > 0

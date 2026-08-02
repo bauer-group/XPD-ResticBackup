@@ -1,0 +1,163 @@
+---
+# =============================================================================
+# restic_backup Role - Installation from a verified release
+# =============================================================================
+# NOT `curl … | bash`. An unattended converge must be able to state, before it
+# executes anything, that the payload is exactly the reviewed artefact: hence
+# get_url with a checksum, then the installer run against the unpacked tree.
+# curl|bash gives you neither an integrity assertion nor a changed_when you can
+# reason about, and it makes every host a live consumer of whatever is at the
+# other end of that URL right now.
+#
+# install.sh is configured ENTIRELY through the environment — it is designed to
+# be piped into bash and has no usable command line, so there is no --offline
+# flag to pass. INSTALL_METHOD=local + SOURCE_DIR is what "install from the
+# payload we already verified" looks like.
+# =============================================================================
+
+- name: "[restic_backup][install] Read the installation marker"
+  ansible.builtin.slurp:
+    src: "{{ restic_backup_confdir }}/.installed"
+  register: restic_backup_marker_raw
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+# The backslashes are doubled on purpose. Jinja decodes escape sequences in
+# its string literals, so a single '\1' would become the control character
+# 0x01 and the capture-group backreference would silently never match.
+- name: "[restic_backup][install] Parse the installed versions"
+  ansible.builtin.set_fact:
+    restic_backup_installed_version: >-
+      {{ ((restic_backup_marker_raw.content | default('') | b64decode)
+          | regex_search('version=([^\\n]+)', '\\1') | default([], true) | first | default('')) | trim }}
+    restic_backup_installed_restic_version: >-
+      {{ ((restic_backup_marker_raw.content | default('') | b64decode)
+          | regex_search('restic=([^\\n]+)', '\\1') | default([], true) | first | default('')) | trim }}
+
+# One decision, made once, reused by every task below — so "why did it
+# reinstall?" has exactly one answer instead of three overlapping conditions.
+- name: "[restic_backup][install] Decide whether an installation run is needed"
+  ansible.builtin.set_fact:
+    restic_backup_install_needed: >-
+      {{ (restic_backup_force_install | bool)
+         or (restic_backup_installed_version != restic_backup_version)
+         or (restic_backup_install_restic | bool
+             and restic_backup_installed_restic_version != restic_backup_restic_version) }}
+
+- name: "[restic_backup][install] Report the pending version change"
+  ansible.builtin.debug:
+    msg: >-
+      bg-backup {{ restic_backup_installed_version | default('(none)', true) }}
+      → {{ restic_backup_version }},
+      restic {{ restic_backup_installed_restic_version | default('(none)', true) }}
+      → {{ restic_backup_restic_version }}
+  when: restic_backup_install_needed | bool
+
+- name: "[restic_backup][install] Ensure the download directory exists"
+  ansible.builtin.file:
+    path: "{{ restic_backup_download_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: "[restic_backup][install] Download the pinned release tarball"
+  ansible.builtin.get_url:
+    url: "{{ restic_backup_release_url }}"
+    dest: "{{ restic_backup_release_tarball }}"
+    # A mismatch fails the task and nothing is unpacked. This is the assertion
+    # the whole "no curl|bash" argument rests on — never make it optional.
+    checksum: "sha256:{{ restic_backup_release_checksum }}"
+    owner: root
+    group: root
+    mode: "0600"
+    timeout: "{{ restic_backup_download_timeout }}"
+  register: restic_backup_download
+  when: restic_backup_install_needed | bool
+
+- name: "[restic_backup][install] Create the versioned payload directory"
+  ansible.builtin.file:
+    path: "{{ restic_backup_release_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: restic_backup_install_needed | bool
+
+# `creates` is safe here because the directory carries the version in its name:
+# a new pin means a new directory, so the guard can never suppress an unpack
+# that was actually required.
+- name: "[restic_backup][install] Unpack the release"
+  ansible.builtin.unarchive:
+    src: "{{ restic_backup_release_tarball }}"
+    dest: "{{ restic_backup_release_dir }}"
+    remote_src: true
+    owner: root
+    group: root
+    extra_opts:
+      - "--strip-components={{ restic_backup_release_strip_components }}"
+    creates: "{{ restic_backup_release_dir }}/install.sh"
+  when: restic_backup_install_needed | bool
+
+- name: "[restic_backup][install] Run the bundled installer against the verified payload"
+  ansible.builtin.command:
+    cmd: /bin/bash ./install.sh
+    chdir: "{{ restic_backup_release_dir }}"
+  environment:
+    INSTALL_METHOD: "local"
+    SOURCE_DIR: "{{ restic_backup_release_dir }}"
+    PREFIX: "{{ restic_backup_prefix }}"
+    BINDIR: "{{ restic_backup_bindir }}"
+    CONFDIR: "{{ restic_backup_confdir }}"
+    LOGDIR: "{{ restic_backup_logdir }}"
+    STATEDIR: "{{ restic_backup_statedir }}"
+    UNITDIR: "{{ restic_backup_unitdir }}"
+    PROFILE: "{{ restic_backup_install_profile }}"
+    RESTIC_INSTALL: "{{ '1' if restic_backup_install_restic | bool else '0' }}"
+    RESTIC_VERSION: "{{ restic_backup_restic_version }}"
+    RESTIC_VERIFY: "{{ restic_backup_restic_verify }}"
+    INSTALL_JQ: "1"
+    INSTALL_FUSE: "{{ '1' if restic_backup_install_fuse | bool else '0' }}"
+    # This role owns /etc/logrotate.d/bg-backup (tasks/logrotate.yml). Letting
+    # the installer drop its own copy as well would give the file two owners
+    # and make it flip on every version bump.
+    INSTALL_LOGROTATE: "0"
+    OFFLINE: "{{ '1' if restic_backup_offline | bool else '0' }}"
+    # Repository setup and timer arming belong to this role, not the
+    # installer: it would have to take the passphrase and the S3 keys as
+    # command-line arguments, and /proc/<pid>/cmdline is world-readable.
+    INIT_REPO: "0"
+    ENABLE_TIMERS: "0"
+    FORCE: "{{ '1' if restic_backup_force_install | bool else '0' }}"
+    NO_COLOR: "1"
+  register: restic_backup_installer
+  # The task only runs when the marker says the pinned version is not the
+  # installed one, so "it ran" and "it changed something" are the same event.
+  changed_when: true
+  when: restic_backup_install_needed | bool
+  notify:
+    - Reload systemd manager configuration
+
+- name: "[restic_backup][install] Confirm the installed version"
+  ansible.builtin.command:
+    cmd: "{{ restic_backup_bin }} version"
+  register: restic_backup_version_out
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Skipped under --check, where the installer never ran and the binary may not
+# exist yet: reporting "version mismatch" there would be an artefact of the
+# dry run rather than a finding about the host.
+- name: "[restic_backup][install] Fail when the installed version is not the pinned one"
+  ansible.builtin.assert:
+    that:
+      - restic_backup_version_out.rc == 0
+      - restic_backup_version in restic_backup_version_out.stdout
+    fail_msg: >-
+      The installer finished but {{ restic_backup_bin }} does not report
+      {{ restic_backup_version }} (rc={{ restic_backup_version_out.rc }}).
+      Output was: {{ restic_backup_version_out.stdout | default('') }}
+    quiet: true
+  when: not ansible_check_mode

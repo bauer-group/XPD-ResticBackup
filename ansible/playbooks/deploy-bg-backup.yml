@@ -1,0 +1,83 @@
+---
+# =============================================================================
+# Deploy bg-backup to a fleet
+# =============================================================================
+# Standalone playbook, for use outside IAC-Ansible's site.yml. Inside
+# IAC-Ansible this is Phase 9 instead - see docs/ansible.md.
+#
+#   ansible-playbook -i inventory playbooks/deploy-bg-backup.yml
+#   ansible-playbook -i inventory playbooks/deploy-bg-backup.yml --limit host.example.com
+#   ansible-playbook -i inventory playbooks/deploy-bg-backup.yml --check --diff
+#
+# ALWAYS --check --diff first on a host that was configured by hand. A converge
+# that wants to change everything means the manual install and the role disagree,
+# and learning that now is considerably better than learning it unattended.
+# =============================================================================
+
+- name: Deploy bg-backup
+  hosts: "{{ target | default('restic_backup_hosts') }}"
+  become: true
+  gather_facts: true
+  tags: [backup, restic, dr]
+
+  pre_tasks:
+    - name: Skip hosts where bg-backup is disabled
+      ansible.builtin.meta: end_host
+      when: not (restic_backup_enabled | default(true) | bool)
+
+    # Fail early and clearly rather than rendering a configuration that cannot
+    # work. Without a repository the role would install a tool that has nowhere
+    # to write, and the first failure would appear at 03:00.
+    - name: Assert that a repository is configured
+      ansible.builtin.assert:
+        that:
+          - restic_backup_repository | default('') | length > 0
+          - restic_backup_password | default('') | length > 0
+        fail_msg: >-
+          restic_backup_repository and restic_backup_password must be set,
+          normally from the secrets role (secrets_restic_*). See docs/ansible.md.
+        quiet: true
+      no_log: true
+
+  roles:
+    - role: restic_backup
+
+  post_tasks:
+    - name: Run doctor
+      ansible.builtin.command:
+        argv: ["{{ restic_backup_bin | default('/usr/local/sbin/bg-backup') }}", doctor]
+      register: doctor
+      changed_when: false
+      failed_when: false
+      when: not (restic_backup_test_mode | default(false) | bool)
+
+    - name: Report the doctor result
+      ansible.builtin.debug:
+        msg: "{{ doctor.stderr_lines | default(doctor.stdout_lines) | default([]) }}"
+      when:
+        - doctor is defined
+        - doctor.rc | default(0) != 0
+
+    # A warning, not a failure: doctor legitimately reports findings on a host
+    # that has not been initialised yet, and failing the play would make the
+    # first deployment look broken.
+    - name: Warn when doctor reported a problem
+      ansible.builtin.debug:
+        msg: >-
+          bg-backup doctor exited {{ doctor.rc }} on {{ inventory_hostname }}.
+          Run 'bg-backup doctor' there and read the failures before arming timers.
+      when:
+        - doctor is defined
+        - doctor.rc | default(0) != 0
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg:
+          - "Installed. NOT yet protecting this host."
+          - "1. bg-backup init            (if no repository is configured yet)"
+          - "2. bg-backup discover        (check the --one-file-system trap and local images)"
+          - "3. bg-backup backup --all    (a first run, by hand)"
+          - "4. bg-backup verify          (prove a restore works)"
+          - "5. bg-backup config export   (the recovery bundle - copy it OFF the host)"
+          - "6. bg-backup schedule enable (only now)"
+      when: not (restic_backup_test_mode | default(false) | bool)

@@ -1,0 +1,102 @@
+---
+# =============================================================================
+# restic_backup Role - Configuration
+# =============================================================================
+# Everything under /etc/bg-backup that is not a credential is rendered here and
+# is owned by Ansible. bg-backup lints every one of these files before it
+# sources them (root-owned, 0640 or tighter, whitelisted keys, no command
+# substitution), so a template that renders something unexpected fails loudly
+# at the next run rather than doing something surprising as root.
+# =============================================================================
+
+- name: "[restic_backup][config] Ensure the configuration tree exists"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ restic_backup_confdir }}"
+      mode: "0750"
+    - path: "{{ restic_backup_confdir }}/conf.d"
+      mode: "0750"
+    - path: "{{ restic_backup_confdir }}/excludes"
+      mode: "0755"
+    - path: "{{ restic_backup_confdir }}/hooks"
+      mode: "0750"
+    - path: "{{ restic_backup_statedir }}"
+      mode: "0700"
+    - path: "{{ restic_backup_logdir }}"
+      mode: "0750"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: "[restic_backup][config] Render the main configuration"
+  ansible.builtin.template:
+    src: bg-backup.conf.j2
+    dest: "{{ restic_backup_confdir }}/bg-backup.conf"
+    owner: root
+    group: root
+    mode: "0640"
+  notify:
+    - Sync bg-backup schedules
+
+- name: "[restic_backup][config] Render the exclude file"
+  ansible.builtin.template:
+    src: exclude.j2
+    dest: "{{ restic_backup_exclude_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: "[restic_backup][config] Render the job definitions"
+  ansible.builtin.template:
+    src: job.conf.j2
+    dest: "{{ restic_backup_confdir }}/conf.d/{{ '%02d' | format(restic_backup_job.order | int) }}-{{ restic_backup_job.name }}.conf"
+    owner: root
+    group: root
+    mode: "0640"
+  loop: "{{ restic_backup_jobs }}"
+  loop_control:
+    loop_var: restic_backup_job
+    label: "{{ restic_backup_job.name }}"
+  notify:
+    - Sync bg-backup schedules
+
+# --- Remove job files this role does not manage ------------------------------
+# An orphan conf.d entry — left by an earlier install profile, a renamed job or
+# a hand edit — is not inert. bg-backup picks up every *.conf in that directory
+# and `backup --all` runs it on its own schedule with settings nobody reviews.
+# Convergence has to mean "these jobs and no others".
+- name: "[restic_backup][config] Determine which job files this role owns"
+  ansible.builtin.set_fact:
+    # Rendered as JSON and parsed back: a Jinja block-expression returns a
+    # string, and comparing a basename against a stringified list would do
+    # substring matching — '0-system.conf' would appear to be "managed".
+    restic_backup_managed_job_files: >-
+      {% set names = [] %}
+      {% for job in restic_backup_jobs %}
+      {%   set _ = names.append('%02d-%s.conf' | format(job.order | int, job.name)) %}
+      {% endfor %}
+      {{ names | to_json }}
+  when: restic_backup_config_purge | bool
+
+- name: "[restic_backup][config] List job files present on the host"
+  ansible.builtin.find:
+    paths: "{{ restic_backup_confdir }}/conf.d"
+    patterns: "*.conf"
+    file_type: file
+  register: restic_backup_present_job_files
+  when: restic_backup_config_purge | bool
+
+- name: "[restic_backup][config] Remove unmanaged job files"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ restic_backup_present_job_files.files | default([]) | map(attribute='path') | list }}"
+  when:
+    - restic_backup_config_purge | bool
+    - item | basename not in (restic_backup_managed_job_files | from_json)
+  notify:
+    - Sync bg-backup schedules

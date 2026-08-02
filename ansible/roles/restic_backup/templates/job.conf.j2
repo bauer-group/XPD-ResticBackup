@@ -1,0 +1,139 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+{% macro sh_array(items) %}( {% for i in items %}"{{ i }}" {% endfor %}){% endmacro %}
+{% set job = restic_backup_job %}
+# =============================================================================
+# bg-backup job: {{ job.name }}
+# =============================================================================
+# MANAGED BY ANSIBLE (role: restic_backup) - DO NOT EDIT ON THE HOST.
+# Source of truth: restic_backup_jobs in group_vars / host_vars.
+#
+# The job name comes from the file name: {{ '%02d' | format(job.order | int) }}-{{ job.name }}.conf -> "{{ job.name }}".
+#   Run:   bg-backup backup {{ job.name }}
+#   Unit:  bg-backup@{{ job.name }}.service / .timer
+# =============================================================================
+
+JOB_ENABLED={{ 1 if job.enabled | default(true) | bool else 0 }}
+JOB_DESCRIPTION="{{ job.description | default('') }}"
+JOB_MODE="{{ job.mode | default('files') }}"
+
+# --- Sources -----------------------------------------------------------------
+{% if (job.mode | default('files')) == 'config' %}
+JOB_CONFIG_PATHS={{ sh_array(job.config_paths | default([restic_backup_confdir, restic_backup_statedir ~ '/facts'])) }}
+{% else %}
+JOB_PATHS={{ sh_array(job.paths | default([])) }}
+# TRAP that tasks/assert.yml checks for on every converge: --one-file-system
+# also SKIPS anything on its own filesystem. A separate /var/lib/docker or
+# /srv mount below a source path is silently omitted and the run still exits 0.
+# Such mounts belong in JOB_EXTRA_PATHS (restic_backup_extra_paths).
+JOB_ONE_FILE_SYSTEM={{ 1 if job.one_file_system | default(restic_backup_one_file_system) | bool else 0 }}
+JOB_EXTRA_PATHS={{ sh_array(job.extra_paths | default([])) }}
+{% endif %}
+
+# --- Exclusions --------------------------------------------------------------
+JOB_EXCLUDE_FILE="{{ job.exclude_file | default(restic_backup_exclude_file) }}"
+JOB_EXCLUDES={{ sh_array(job.excludes | default([])) }}
+JOB_EXCLUDE_CACHES={{ 1 if job.exclude_caches | default(restic_backup_exclude_caches) | bool else 0 }}
+JOB_EXCLUDE_LARGER_THAN="{{ job.exclude_larger_than | default('') }}"
+JOB_EXCLUDE_IF_PRESENT="{{ job.exclude_if_present | default('') }}"
+
+# --- Consistency -------------------------------------------------------------
+JOB_QUIESCE="{{ job.quiesce | default('none') }}"
+JOB_QUIESCE_UNITS={{ sh_array(job.quiesce_units | default([])) }}
+JOB_QUIESCE_SCOPE="{{ job.quiesce_scope | default('project') }}"
+JOB_QUIESCE_MAX_SECONDS={{ job.quiesce_max_seconds | default(300) }}
+JOB_SNAPSHOT_SIZE="{{ job.snapshot_size | default('10G') }}"
+
+# --- Tags --------------------------------------------------------------------
+# job=, host=, run= and bg-backup=1 are added by the tool; never set them here.
+JOB_TAGS={{ sh_array(job.tags | default([])) }}
+
+# --- Schedule ----------------------------------------------------------------
+JOB_SCHEDULE="{{ job.schedule | default('') }}"
+JOB_RANDOM_DELAY="{{ job.random_delay | default(restic_backup_random_delay) }}"
+JOB_TIMEOUT="{{ job.timeout | default('12h') }}"
+JOB_PRIORITY="{{ job.priority | default(restic_backup_priority) }}"
+
+# --- Retention (empty = inherit BGB_DEFAULT_*) -------------------------------
+JOB_KEEP_LAST="{{ job.keep_last | default('') }}"
+JOB_KEEP_DAILY="{{ job.keep_daily | default('') }}"
+JOB_KEEP_WEEKLY="{{ job.keep_weekly | default('') }}"
+JOB_KEEP_MONTHLY="{{ job.keep_monthly | default('') }}"
+JOB_KEEP_YEARLY="{{ job.keep_yearly | default('') }}"
+JOB_KEEP_WITHIN="{{ job.keep_within | default('') }}"
+
+{% if restic_backup_forget_local | bool %}
+JOB_FORGET_AFTER_BACKUP={{ 1 if job.forget_after_backup | default(true) | bool else 0 }}
+{% else %}
+# 0 because restic_backup_forget_local is false. With the recommended bucket
+# policy this host's key may delete nothing but its own lock objects, so a
+# nightly forget would fail every night. Retention is applied off-host by an
+# identity that is allowed to remove history - which is exactly the point:
+# root on this machine must not be able to erase its own backups.
+JOB_FORGET_AFTER_BACKUP=0
+{% endif %}
+{% if restic_backup_prune_local | bool %}
+JOB_PRUNE_AFTER_BACKUP={{ 1 if job.prune_after_backup | default(false) | bool else 0 }}
+{% else %}
+JOB_PRUNE_AFTER_BACKUP=0
+{% endif %}
+
+# --- Hooks -------------------------------------------------------------------
+# Executables in {{ restic_backup_confdir }}/hooks/{{ job.name }}/pre.d and
+# post.d also run, in lexical order, with a scrubbed environment.
+JOB_PRE_HOOKS={{ sh_array(job.pre_hooks | default([])) }}
+JOB_POST_HOOKS={{ sh_array(job.post_hooks | default([])) }}
+JOB_HOOK_FAILURE="{{ job.hook_failure | default(restic_backup_hook_failure) }}"
+
+# --- Monitoring --------------------------------------------------------------
+JOB_ALERT_MAX_AGE_HOURS={{ job.alert_max_age_hours | default(restic_backup_alert_max_age_hours) }}
+
+# Exit 3 = "snapshot created, some sources unreadable". On a live filesystem
+# that is normal (rotating logs, sockets). With services quiesced it is a real
+# signal and must not be folded into success.
+JOB_PARTIAL_IS_FAILURE={{ 1 if job.partial_is_failure | default(false) | bool else 0 }}
+
+# --- Downstream --------------------------------------------------------------
+{% if restic_backup_secondary_repo_base | length > 0 %}
+JOB_COPY_TO_SECONDARY={{ 1 if job.copy_to_secondary | default(false) | bool else 0 }}
+{% else %}
+JOB_COPY_TO_SECONDARY=0
+{% endif %}
+JOB_VERIFY_SAMPLE={{ job.verify_sample | default(3) }}
+{% if (job.mode | default('files')) == 'docker' %}
+
+# --- Docker discovery --------------------------------------------------------
+# Application-level, not /var/lib/docker/overlay2: image layers are rebuildable
+# from a registry, and restoring them ties the restore to the exact Docker
+# version and storage driver of the machine that wrote them.
+JOB_DOCKER_DISCOVER={{ 1 if job.docker_discover | default(true) | bool else 0 }}
+JOB_DOCKER_PROJECTS={{ sh_array(job.docker_projects | default([])) }}
+JOB_DOCKER_EXCLUDE_PROJECTS={{ sh_array(job.docker_exclude_projects | default([])) }}
+JOB_DOCKER_INCLUDE_COMPOSE_FILES={{ 1 if job.docker_include_compose_files | default(true) | bool else 0 }}
+JOB_DOCKER_INCLUDE_ENV_FILES={{ 1 if job.docker_include_env_files | default(true) | bool else 0 }}
+JOB_DOCKER_INCLUDE_NAMED_VOLUMES={{ 1 if job.docker_include_named_volumes | default(true) | bool else 0 }}
+JOB_DOCKER_INCLUDE_BIND_MOUNTS={{ 1 if job.docker_include_bind_mounts | default(true) | bool else 0 }}
+# Network subnets matter more than they look: recreated implicitly, Docker
+# hands out different ones from its pool and every firewall rule or ACL that
+# named the old subnet stops matching without a single error.
+JOB_DOCKER_IMAGE_MANIFEST={{ 1 if job.docker_image_manifest | default(true) | bool else 0 }}
+JOB_DOCKER_NETWORK_MANIFEST={{ 1 if job.docker_network_manifest | default(true) | bool else 0 }}
+# none|missing|all - "missing" exports only images with no RepoDigest, i.e.
+# built locally and never pushed, therefore unrecoverable from any registry.
+JOB_DOCKER_EXPORT_IMAGES="{{ job.docker_export_images | default('missing') }}"
+JOB_DOCKER_INCLUDE_OVERLAY2={{ 1 if job.docker_include_overlay2 | default(false) | bool else 0 }}
+JOB_DOCKER_EXTRA_PATHS={{ sh_array(job.docker_extra_paths | default([])) }}
+
+# --- Database dumps ----------------------------------------------------------
+# Streamed via restic backup --stdin-from-command, which ABORTS the backup when
+# the dump command exits non-zero. Piping into --stdin instead would store the
+# truncated dump as a healthy snapshot.
+JOB_DB_DUMP={{ 1 if job.db_dump | default(true) | bool else 0 }}
+JOB_DB_ENGINES={{ sh_array(job.db_engines | default(['postgres', 'mysql', 'mariadb', 'mongodb', 'redis'])) }}
+JOB_DB_EXCLUDE_CONTAINERS={{ sh_array(job.db_exclude_containers | default([])) }}
+JOB_DB_DUMP_TIMEOUT="{{ job.db_dump_timeout | default(3600) }}"
+# Never pre-compress: restic compresses anyway, and plain SQL deduplicates
+# across days at chunk boundaries while a gzip stream changes wholesale after
+# the first differing byte.
+JOB_DB_DUMP_COMPRESS={{ 1 if job.db_dump_compress | default(false) | bool else 0 }}
+JOB_DB_RECORD_COUNTS={{ 1 if job.db_record_counts | default(true) | bool else 0 }}
+{% endif %}

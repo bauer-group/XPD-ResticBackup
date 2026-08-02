@@ -1,0 +1,87 @@
+---
+# =============================================================================
+# molecule converge: restic_backup
+# =============================================================================
+# test_mode renders everything and installs nothing. That boundary is what makes
+# this scenario meaningful in a container: it exercises the parts that fail
+# without a network (templating, modes, unit syntax, assertions) and skips the
+# parts a container cannot honestly prove (a real download, a started timer).
+#
+# The credentials below are throwaway literals. verify.yml asserts they do not
+# leak outside the credentials directory, which is the point of having them be
+# recognisable rather than realistic.
+# =============================================================================
+
+- name: Converge
+  hosts: all
+  become: true
+
+  vars:
+    restic_backup_enabled: true
+    restic_backup_test_mode: true
+
+    # A legacy-style hostname on purpose: the role must never derive an asset id
+    # or a group code from it, and must never assert the AAAA-GG schema.
+    # See docs/ansible.md.
+    restic_backup_repo_prefix: "25000-040.cloud.bauer-group.com"
+
+    restic_backup_repository: >-
+      s3:https://minio.example.invalid/backup-server/25000-040.cloud.bauer-group.com
+    restic_backup_password: "molecule-throwaway-passphrase-do-not-use"
+    restic_backup_s3_access_key_id: "molecule-throwaway-key"
+    restic_backup_s3_secret_access_key: "molecule-throwaway-secret"
+    restic_backup_s3_region: "eu-north1"
+
+    restic_backup_notifiers: ["uptime-kuma", "email"]
+    restic_backup_kuma_push_url: "https://kuma.example.invalid/api/push/molecule-token"
+    restic_backup_mail_to: "support@support.bauer-group.com"
+
+    restic_backup_prune_local: false
+
+    restic_backup_jobs:
+      - name: system
+        enabled: true
+        mode: files
+        sources: ["/"]
+        one_file_system: true
+        schedule: "*-*-* 02:30:00"
+        partial_is_failure: false
+        retention: {keep_daily: 30, keep_weekly: 8, keep_monthly: 6}
+      - name: docker
+        enabled: true
+        mode: docker
+        schedule: "*-*-* 03:00:00"
+        quiesce: docker-pause
+        partial_is_failure: true
+        retention: {keep_daily: 14, keep_weekly: 8, keep_monthly: 6}
+
+  pre_tasks:
+    - name: Create the directories the product would have created
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - /etc/systemd/system
+        - /usr/local/sbin
+
+    # In test_mode the role does not install the payload, so the units it would
+    # otherwise find are absent. Stub the templated one so the drop-in logic and
+    # `systemd-analyze verify` have something real to work on.
+    - name: Stub the templated unit so the drop-in path is exercised
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/bg-backup@.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=bg-backup job %i (molecule stub)
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+
+  roles:
+    - role: restic_backup

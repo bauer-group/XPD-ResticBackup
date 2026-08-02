@@ -1,0 +1,86 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# =============================================================================
+# bg-backup - exclusions
+# =============================================================================
+# MANAGED BY ANSIBLE (role: restic_backup) - DO NOT EDIT ON THE HOST.
+# Add patterns through restic_backup_exclude_extra in the inventory.
+#
+# restic exclude patterns. ** matches across directory levels. Excludes do NOT
+# apply to a path passed explicitly as a backup source, so listing a mount here
+# and in JOB_EXTRA_PATHS is a contradiction the extra path wins.
+# =============================================================================
+{% if restic_backup_exclude_baseline | bool %}
+
+# --- Virtual and volatile filesystems ----------------------------------------
+# No persistent content, and restoring them over a running system is actively
+# harmful.
+/proc
+/sys
+/dev
+/run
+/tmp
+/var/tmp
+/mnt
+/media
+/lost+found
+
+# --- Swap --------------------------------------------------------------------
+/swap.img
+/swapfile
+/swap/**
+
+# --- Rebuildable container layers --------------------------------------------
+# /var/lib/docker/volumes is deliberately NOT excluded - that is the data.
+/var/lib/docker/overlay2
+/var/lib/docker/image
+/var/lib/docker/tmp
+/var/lib/docker/buildkit
+/var/lib/docker/runtimes
+/var/lib/containerd
+/var/lib/containers/storage/overlay
+
+# --- Caches and package archives ---------------------------------------------
+/var/cache
+/var/lib/apt/lists
+/var/lib/snapd/cache
+/snap
+/root/.cache
+/home/*/.cache
+/home/*/.local/share/Trash
+/home/*/.local/share/containers
+**/node_modules/.cache
+**/.venv/**/__pycache__
+
+# --- Logs that are pure noise on restore -------------------------------------
+# The journal itself is kept: it is often the only record of what happened
+# before an incident. Only the rotated, compressed archives are dropped.
+/var/log/journal/*/*@*.journal
+/var/log/**/*.gz
+/var/log/**/*.[0-9]
+/var/log/**/*.old
+
+# --- bg-backup's own scratch --------------------------------------------------
+# Backing up the restic cache into the repository it caches is a fast way to
+# double the repository size for no benefit.
+{{ restic_backup_statedir }}/cache
+{{ restic_backup_statedir }}/tmp
+{{ restic_backup_statedir }}/restore
+{{ restic_backup_statedir }}/snap
+
+# The verified release payload: it is reproducible from the pinned URL and
+# digest in the inventory, and it is several megabytes per version.
+{{ restic_backup_download_dir }}
+
+# --- Miscellaneous -----------------------------------------------------------
+/var/lib/systemd/coredump
+/var/crash
+**/.Trash-*
+**/lost+found
+{% endif %}
+{% if restic_backup_exclude_extra | length > 0 %}
+
+# --- Inventory-supplied patterns (restic_backup_exclude_extra) ---------------
+{% for pattern in restic_backup_exclude_extra %}
+{{ pattern }}
+{% endfor %}
+{% endif %}

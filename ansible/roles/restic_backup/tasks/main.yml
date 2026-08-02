@@ -1,0 +1,57 @@
+---
+# =============================================================================
+# restic_backup Role - Main orchestrator
+# =============================================================================
+# Phase order matters:
+#   1. assert      — preconditions, including the --one-file-system trap check
+#   2. install     — verified tarball + install.sh (skipped in test mode)
+#   3. credentials — repo.env / repo.key / notify.env, 0400, no_log
+#   4. config      — bg-backup.conf, conf.d/*.conf, excludes
+#   5. systemd     — EnvironmentFile drop-ins, schedule sync, timer state
+#   6. logrotate   — Ansible-owned /etc/logrotate.d/bg-backup
+#   7. verify      — config validate + doctor (skipped in test mode)
+#
+# Credentials are written BEFORE the configuration on purpose: bg-backup.conf
+# points at them, and a config that references a missing repo.env makes every
+# later command in this role exit 4 instead of doing its job.
+#
+# The role deliberately does NOT use `meta: end_host` when disabled — that ends
+# the whole play for the host and would silently skip any role that happens to
+# run after this one in the same play.
+# =============================================================================
+
+- name: "[restic_backup] Configure bg-backup"
+  when: restic_backup_enabled | bool
+  block:
+    - name: "[restic_backup] Validate preconditions"
+      ansible.builtin.include_tasks: assert.yml
+
+    - name: "[restic_backup] Install the pinned bg-backup release"
+      ansible.builtin.include_tasks: install.yml
+      when: not (restic_backup_test_mode | bool)
+
+    - name: "[restic_backup] Write repository credentials"
+      ansible.builtin.include_tasks: credentials.yml
+
+    - name: "[restic_backup] Render configuration and job definitions"
+      ansible.builtin.include_tasks: config.yml
+
+    - name: "[restic_backup] Wire up systemd"
+      ansible.builtin.include_tasks: systemd.yml
+
+    - name: "[restic_backup] Install log rotation"
+      ansible.builtin.include_tasks: logrotate.yml
+      when: restic_backup_manage_logrotate | bool
+
+    - name: "[restic_backup] Validate the installed configuration"
+      ansible.builtin.include_tasks: verify.yml
+      when: not (restic_backup_test_mode | bool)
+
+- name: "[restic_backup] Report that the role is disabled on this host"
+  ansible.builtin.debug:
+    msg: >-
+      restic_backup_enabled is false for {{ inventory_hostname }} — no backup
+      configuration was touched. Any existing installation keeps running with
+      whatever is already on disk; this role never uninstalls implicitly.
+    verbosity: 1
+  when: not (restic_backup_enabled | bool)

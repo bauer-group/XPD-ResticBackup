@@ -1,0 +1,54 @@
+---
+# =============================================================================
+# restic_backup Role - Log rotation
+# =============================================================================
+# The installer ships its own logrotate snippet; this role turns that off
+# (INSTALL_LOGROTATE=0) and owns the file instead, so retention of the LOGS is
+# an inventory decision like everything else here.
+#
+# `copy` rather than `template`: the file has no per-host logic beyond two
+# variables, and an unlisted template would be one more thing to keep in sync.
+# =============================================================================
+
+- name: "[restic_backup][logrotate] Ensure logrotate is installed"
+  ansible.builtin.apt:
+    name: logrotate
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: not (restic_backup_test_mode | bool)
+
+- name: "[restic_backup][logrotate] Install the bg-backup rotation policy"
+  ansible.builtin.copy:
+    content: |
+      # =========================================================================
+      # bg-backup log rotation — managed by Ansible (restic_backup role)
+      # =========================================================================
+      # notifempty + missingok: a host that has not run a backup yet has no log
+      # file, and logrotate must not turn that into a nightly cron error mail.
+      #
+      # copytruncate is deliberately NOT used. bg-backup appends with O_APPEND
+      # and reopens per run, so a plain rename is safe, whereas copytruncate has
+      # a window in which a concurrently running backup writes into the gap and
+      # loses the very lines that explain a failure.
+      {{ restic_backup_logdir }}/*.log
+      {{ restic_backup_logdir }}/jobs/*.log
+      {{ restic_backup_logdir }}/install.log
+      {
+          {{ restic_backup_logrotate_frequency }}
+          rotate {{ restic_backup_logrotate_rotate }}
+          compress
+          delaycompress
+          missingok
+          notifempty
+          nocreate
+          su root root
+      }
+    dest: /etc/logrotate.d/bg-backup
+    owner: root
+    group: root
+    mode: "0644"
+    # logrotate -d parses the file and exits non-zero on a syntax error without
+    # rotating anything. Skipped in test mode, where the package may be absent
+    # from the container image.
+    validate: "{{ omit if restic_backup_test_mode | bool else 'logrotate -d %s' }}"

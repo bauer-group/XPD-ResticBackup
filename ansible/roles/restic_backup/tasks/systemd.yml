@@ -1,0 +1,162 @@
+---
+# =============================================================================
+# restic_backup Role - systemd integration
+# =============================================================================
+# Two jobs here:
+#
+#   1. Give the units an EnvironmentFile so notifier credentials reach the
+#      process without ever appearing in the 0640 bg-backup.conf.
+#   2. Let bg-backup generate its own timers from the job definitions, then
+#      arm or disarm them according to restic_backup_schedule_state.
+#
+# The unit FILES belong to the product, not to this role. Ansible only adds a
+# drop-in beside them: a role that rewrites another project's unit files ends
+# up pinning them to whatever the role author believed at the time, and the
+# next upstream fix never lands.
+# =============================================================================
+
+- name: "[restic_backup][systemd] Check whether notifier credentials exist"
+  ansible.builtin.stat:
+    path: "{{ restic_backup_notify_env }}"
+  register: restic_backup_notify_env_stat
+
+- name: "[restic_backup][systemd] Look for the units that should carry the drop-in"
+  ansible.builtin.stat:
+    path: "{{ restic_backup_unitdir }}/{{ item }}"
+  register: restic_backup_unit_stat
+  loop: "{{ restic_backup_env_dropin_units }}"
+  loop_control:
+    label: "{{ item }}"
+
+# A drop-in directory for a unit that does not exist is not harmless: systemd
+# reports it in `systemd-analyze verify` and every daemon-reload, which trains
+# people to ignore that output. Only write beside a unit that is really there —
+# except in test mode, where nothing is installed and rendering the drop-in is
+# the entire point of the exercise.
+- name: "[restic_backup][systemd] Create the drop-in directories"
+  ansible.builtin.file:
+    path: "{{ restic_backup_unitdir }}/{{ item.item }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ restic_backup_unit_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists or (restic_backup_test_mode | bool and item.item == 'bg-backup@.service')
+
+- name: "[restic_backup][systemd] Install the notifier credential drop-in"
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible (restic_backup role) — DO NOT EDIT
+      #
+      # LoadCredential=, NOT EnvironmentFile=.
+      #
+      # EnvironmentFile= would merge the Kuma push token and the Teams webhook
+      # into the unit's environment block, and
+      #     systemctl show -p Environment bg-backup@system.service
+      # renders that block for ANY local user. Both are credentials: anyone
+      # holding the webhook URL can post as the bot. See docs/adr/0003.
+      #
+      # LoadCredential= puts the file in a per-invocation root-only ramfs that
+      # systemctl never renders. bg-backup reads it back from
+      # $CREDENTIALS_DIRECTORY (notify_env_load in lib/config.sh).
+      #
+      # Written ONLY when the file exists: a LoadCredential= whose source is
+      # missing makes the unit fail to START, which would stop the backup
+      # because the ALERTING is unconfigured — precisely backwards.
+      [Service]
+      LoadCredential=notify.env:{{ restic_backup_notify_env }}
+    dest: "{{ restic_backup_unitdir }}/{{ item.item }}.d/10-ansible-credentials.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ restic_backup_unit_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - item.stat.exists or (restic_backup_test_mode | bool and item.item == 'bg-backup@.service')
+    - restic_backup_notify_env_stat.stat.exists | default(false)
+  notify:
+    - Reload systemd manager configuration
+
+# Remove the drop-in when notifiers were switched off. Left behind, it points
+# LoadCredential= at a file that no longer exists and the unit refuses to start
+# - the backup would stop because the alerting was disabled.
+- name: "[restic_backup][systemd] Remove the credential drop-in when no notifier credentials exist"
+  ansible.builtin.file:
+    path: "{{ restic_backup_unitdir }}/{{ item.item }}.d/10-ansible-credentials.conf"
+    state: absent
+  loop: "{{ restic_backup_unit_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: not (restic_backup_notify_env_stat.stat.exists | default(false))
+  notify:
+    - Reload systemd manager configuration
+
+# Historical: earlier revisions of this role installed an EnvironmentFile drop-in
+# here, which exposed the notifier tokens via `systemctl show -p Environment`.
+# Removed unconditionally so an upgraded host does not keep the disclosure.
+- name: "[restic_backup][systemd] Remove the superseded EnvironmentFile drop-in"
+  ansible.builtin.file:
+    path: "{{ restic_backup_unitdir }}/{{ item.item }}.d/10-ansible-environment.conf"
+    state: absent
+  loop: "{{ restic_backup_unit_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  notify:
+    - Reload systemd manager configuration
+
+# Runs the daemon-reload and the schedule sync NOW rather than at the end of
+# the play, because the timer state tasks below act on units that the sync is
+# what creates. (This flushes every pending handler in the play, not only ours
+# — that is how meta: flush_handlers works and it is the accepted cost.)
+- name: "[restic_backup][systemd] Apply pending unit changes before touching timers"
+  ansible.builtin.meta: flush_handlers
+
+- name: "[restic_backup][systemd] Generate timers from the job definitions"
+  ansible.builtin.command:
+    cmd: "{{ restic_backup_bin }} schedule sync"
+  register: restic_backup_schedule_sync
+  # `schedule sync` is declarative and idempotent, and its output is written
+  # for humans on stderr rather than for machines. Rather than pattern-match
+  # prose that upstream is free to reword, this task reports no change and the
+  # templates that feed it report theirs.
+  changed_when: false
+  when:
+    - not (restic_backup_test_mode | bool)
+    - not ansible_check_mode
+
+- name: "[restic_backup][systemd] Arm the timers"
+  ansible.builtin.command:
+    cmd: "{{ restic_backup_bin }} schedule enable"
+  changed_when: false
+  when:
+    - restic_backup_schedule_state == "enabled"
+    - not (restic_backup_test_mode | bool)
+    - not ansible_check_mode
+
+- name: "[restic_backup][systemd] Disarm the timers"
+  ansible.builtin.command:
+    cmd: "{{ restic_backup_bin }} schedule disable"
+  changed_when: false
+  when:
+    - restic_backup_schedule_state == "disabled"
+    - not (restic_backup_test_mode | bool)
+    - not ansible_check_mode
+
+- name: "[restic_backup][systemd] Read back the resulting timer state"
+  ansible.builtin.command:
+    cmd: systemctl list-timers --all --no-pager --no-legend bg-backup*
+  register: restic_backup_timer_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not (restic_backup_test_mode | bool)
+
+- name: "[restic_backup][systemd] Report the resulting timer state"
+  ansible.builtin.debug:
+    msg: >-
+      {{ restic_backup_timer_state.stdout_lines | default(['(no bg-backup timers)']) }}
+    verbosity: 1
+  when: not (restic_backup_test_mode | bool)

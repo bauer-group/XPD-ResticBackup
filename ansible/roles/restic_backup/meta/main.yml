@@ -1,0 +1,25 @@
+---
+galaxy_info:
+  role_name: restic_backup
+  namespace: bauer_group
+  author: BAUER GROUP
+  description: Deploy and configure bg-backup, the restic-based backup and disaster-recovery tool
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble, resolute]
+    - name: Debian
+      versions: [trixie]
+  galaxy_tags:
+    - backup
+    - restic
+    - restore
+    - disaster-recovery
+
+# Deliberately empty. A backup host is not necessarily a Docker host, and
+# depending on the docker role would either drag Docker onto machines that must
+# not have it or make this role unusable on the ones that do not. The docker
+# job is gated on group membership instead ('docker_hosts' in group_names), so
+# the dependency is expressed where it actually exists: in the job list.
+dependencies: []

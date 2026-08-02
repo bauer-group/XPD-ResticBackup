@@ -1,0 +1,25 @@
+---
+# =============================================================================
+# restic_backup Role - Handlers
+# =============================================================================
+# Handlers fire in the order they are DEFINED here, not in the order they were
+# notified. That ordering is load-bearing: the drop-in has to be visible to
+# systemd before bg-backup regenerates and reloads its timers, otherwise the
+# freshly written units start without their EnvironmentFile and the first
+# scheduled run notifies nobody.
+# =============================================================================
+
+- name: Reload systemd manager configuration
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: not (restic_backup_test_mode | bool)
+
+- name: Sync bg-backup schedules
+  ansible.builtin.command:
+    cmd: "{{ restic_backup_bin }} schedule sync"
+  # A handler only runs because something it depends on actually changed, so
+  # reporting a change here is honest rather than decorative.
+  changed_when: true
+  when:
+    - not (restic_backup_test_mode | bool)
+    - not ansible_check_mode

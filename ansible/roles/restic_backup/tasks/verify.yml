@@ -1,0 +1,81 @@
+---
+# =============================================================================
+# restic_backup Role - Post-converge validation
+# =============================================================================
+# The role has written files that another program will execute as root at
+# 02:30 with nobody watching. This is where we make it read them back NOW,
+# while there is still a human attached to the output.
+# =============================================================================
+
+- name: "[restic_backup][verify] Validate every configuration file"
+  ansible.builtin.command:
+    cmd: "{{ restic_backup_bin }} config validate --strict"
+  register: restic_backup_validate
+  changed_when: false
+  check_mode: false
+  when: restic_backup_config_validate | bool
+
+# --- Repository bootstrap ----------------------------------------------------
+# Opt-in (restic_backup_repo_init, default false). An automatic init turns a
+# typo in restic_backup_repo_base into a brand-new empty repository that then
+# backs up happily forever, while the real one goes stale and unmonitored —
+# the failure mode looks exactly like success.
+#
+# The credentials are sourced from the 0400 env file inside the shell, so
+# neither the passphrase nor the S3 keys ever appear in argv (world-readable
+# via /proc/<pid>/cmdline) or in an Ansible task argument.
+- name: "[restic_backup][verify] Initialise the repository when it does not exist"
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      set -a
+      . {{ restic_backup_repo_env }}
+      set +a
+      if {{ restic_backup_restic_bin }} cat config >/dev/null 2>&1; then
+        echo "BGB_REPO_PRESENT"
+      else
+        {{ restic_backup_restic_bin }} init >/dev/null
+        echo "BGB_REPO_CREATED"
+      fi
+  register: restic_backup_repo_init_out
+  changed_when: "'BGB_REPO_CREATED' in restic_backup_repo_init_out.stdout"
+  # The output can carry backend error text; keep it out of the log entirely
+  # and let `doctor` below report the state in redacted form.
+  no_log: true
+  when:
+    - restic_backup_repo_init | bool
+    - not ansible_check_mode
+
+# --- Self-check --------------------------------------------------------------
+# doctor reports on things Ansible cannot fix from here: an unreachable bucket,
+# a restic older than the exit-code floor, a repository prefix that does not
+# match the FQDN, an escrow bundle older than the policy. Informational by
+# default — a converge that fails because a bucket is briefly unreachable would
+# also stop every other role behind it.
+- name: "[restic_backup][verify] Run the bg-backup self-check"
+  ansible.builtin.command:
+    cmd: "{{ restic_backup_bin }} doctor"
+  register: restic_backup_doctor
+  changed_when: false
+  failed_when: restic_backup_doctor.rc != 0 and (restic_backup_doctor_fatal | bool)
+  check_mode: false
+  when: restic_backup_run_doctor | bool
+
+# bg-backup writes every human-readable line to stderr by contract (stdout
+# carries payload only), so the findings are in stderr_lines, not stdout_lines.
+- name: "[restic_backup][verify] Report the self-check findings"
+  ansible.builtin.debug:
+    msg: "{{ restic_backup_doctor.stderr_lines | default([]) }}"
+  when:
+    - restic_backup_run_doctor | bool
+    - restic_backup_doctor.rc | default(0) != 0
+
+- name: "[restic_backup][verify] Summarise the outcome"
+  ansible.builtin.debug:
+    msg: >-
+      bg-backup {{ restic_backup_version }} configured on {{ inventory_hostname }}
+      → {{ restic_backup_repository }}
+      | jobs: {{ restic_backup_jobs | map(attribute='name') | join(', ') }}
+      | timers: {{ restic_backup_schedule_state }}
+      | prune on host: {{ 'yes' if restic_backup_prune_local | bool else 'no (retention runs off-host)' }}
+      {{ '| doctor reported findings, see above' if (restic_backup_doctor.rc | default(0)) != 0 else '' }}

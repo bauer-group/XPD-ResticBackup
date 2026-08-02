@@ -1,0 +1,438 @@
+---
+# =============================================================================
+# restic_backup role defaults — the bg-backup driver
+# =============================================================================
+# This role does NOT reimplement bg-backup. It is a DRIVER: it downloads a
+# pinned, checksummed release tarball, runs the bundled installer against that
+# verified payload, and then owns everything under /etc/bg-backup.
+#
+# Everything the tool itself decides (how to talk to restic, how to quiesce,
+# how to fold exit codes) stays in the tool. Everything a fleet has to decide
+# per host (which repository, which jobs, which schedule) lives here.
+#
+# Variable contract: every variable is prefixed restic_backup_. Secrets are
+# resolved from the `secrets` role and are never hardcoded in this file.
+# =============================================================================
+
+# --- Top-level switch -------------------------------------------------------
+restic_backup_enabled: true
+
+# --- Test mode --------------------------------------------------------------
+# Skips everything that needs the network, a package manager or a running
+# systemd unit: the release download, install.sh, `bg-backup schedule sync`,
+# timer arming and the post-install validation. Configuration, credentials,
+# excludes and the systemd drop-in ARE still rendered to disk, so Molecule can
+# converge inside a container and assert on real artefacts.
+restic_backup_test_mode: false
+
+# =============================================================================
+# Release pinning
+# =============================================================================
+# Deliberately pinned by version AND digest. A backup tool is the one piece of
+# software on a host that must not change underneath you on a routine
+# ansible-pull: the day it changes is the day it silently stops matching the
+# repository layout you already have, and you find out at restore time.
+#
+# Bumping a fleet is therefore an explicit two-line commit (version + digest),
+# reviewable and revertible, never a side effect of "the release moved".
+restic_backup_repo_slug: "bauer-group/XPD-ResticBackup"
+restic_backup_version: "1.0.0"
+
+# sha256 of the release asset, lowercase hex, no "sha256:" prefix.
+# Obtain with:  sha256sum bg-backup-<version>.tar.gz
+# MUST be set (asserted) unless restic_backup_test_mode is true.
+restic_backup_release_checksum: ""
+
+# A published release ASSET, not the GitHub-generated source archive.
+# GitHub regenerates /archive/ tarballs on demand and their bytes have changed
+# under a stable tag before now; a release asset is immutable once uploaded, so
+# a digest pin over it actually means something.
+restic_backup_release_url: >-
+  https://github.com/{{ restic_backup_repo_slug }}/releases/download/v{{ restic_backup_version }}/bg-backup-{{ restic_backup_version }}.tar.gz
+
+restic_backup_release_strip_components: 1
+restic_backup_download_dir: "/var/cache/bg-backup-release"
+restic_backup_release_dir: "{{ restic_backup_download_dir }}/bg-backup-{{ restic_backup_version }}"
+restic_backup_release_tarball: "{{ restic_backup_download_dir }}/bg-backup-{{ restic_backup_version }}.tar.gz"
+restic_backup_download_timeout: 120
+
+# Re-run the installer even when the marker file already reports this version.
+restic_backup_force_install: false
+
+# Installer behaviour (install.sh is configured by environment, never argv —
+# it is designed to be piped into bash and has no usable command line).
+#   minimal → the installer seeds only the config job; this role then renders
+#   the authoritative job set. Anything the installer seeds that this role does
+#   not manage would be a second, unowned source of truth.
+restic_backup_install_profile: "minimal"
+restic_backup_install_restic: true
+restic_backup_restic_version: "0.19.1"
+restic_backup_restic_verify: "gpg"        # gpg | sha | none
+restic_backup_install_fuse: false         # only needed for `bg-backup mount`
+restic_backup_offline: false              # 1:1 the installer's OFFLINE=1
+
+# =============================================================================
+# Paths
+# =============================================================================
+restic_backup_prefix: "/opt/bg-backup"
+restic_backup_bindir: "/usr/local/sbin"
+restic_backup_bin: "{{ restic_backup_bindir }}/bg-backup"
+restic_backup_confdir: "/etc/bg-backup"
+restic_backup_statedir: "/var/lib/bg-backup"
+restic_backup_logdir: "/var/log/bg-backup"
+restic_backup_unitdir: "/etc/systemd/system"
+
+restic_backup_credentials_dir: "{{ restic_backup_confdir }}/credentials"
+restic_backup_repo_env: "{{ restic_backup_credentials_dir }}/repo.env"
+restic_backup_repo_key: "{{ restic_backup_credentials_dir }}/repo.key"
+restic_backup_notify_env: "{{ restic_backup_credentials_dir }}/notify.env"
+restic_backup_exclude_file: "{{ restic_backup_confdir }}/excludes/system.exclude"
+
+restic_backup_restic_bin: "/usr/local/bin/restic"
+restic_backup_restic_min_version: "0.17.0"
+
+# =============================================================================
+# Repository identity
+# =============================================================================
+# THE PREFIX IS THE INVENTORY HOSTNAME, VERBATIM.
+#
+# Part of this fleet predates the AAAA-GG naming convention (25000-040.cloud.
+# bauer-group.com is a real host). Deriving an asset id, a group code or any
+# other structure from the hostname would work for most hosts and silently
+# produce a wrong repository path for the rest — which means writing into
+# another host's prefix, or creating an orphan one nobody monitors.
+#
+# So: no parsing, no schema assertion, no cleverness. inventory_hostname is
+# already unique and already the FQDN; `bg-backup doctor` checks that the
+# repository URL ends with it.
+restic_backup_repo_prefix: "{{ inventory_hostname }}"
+
+# Bucket/endpoint without the per-host prefix, e.g.
+#   "s3:https://s3.eu-central-1.example.com/bgb-fleet"
+# Set once in group_vars — it is topology, not a secret.
+restic_backup_repo_base: ""
+restic_backup_repository: "{{ (restic_backup_repo_base ~ '/' ~ restic_backup_repo_prefix) if restic_backup_repo_base | length > 0 else '' }}"
+
+# Optional second repository for `bg-backup copy` (3-2-1). Empty = off.
+# The secondary MUST have been created with
+#   restic init --from-repo <primary> --copy-chunker-params
+# or deduplication collapses and the copy grows several times larger.
+restic_backup_secondary_repo_base: ""
+restic_backup_secondary_repository: "{{ (restic_backup_secondary_repo_base ~ '/' ~ restic_backup_repo_prefix) if restic_backup_secondary_repo_base | length > 0 else '' }}"
+restic_backup_secondary_repo_env: "{{ restic_backup_credentials_dir }}/repo-secondary.env"
+restic_backup_secondary_repo_key: "{{ restic_backup_credentials_dir }}/repo-secondary.key"
+
+# Snapshot host label. Explicit rather than "let the tool call hostname -f":
+# a host with a broken /etc/hosts would otherwise start a fresh snapshot
+# lineage under a different name, stop matching `forget --host`, and neither
+# get pruned nor found by a restore-by-name.
+restic_backup_hostname: "{{ inventory_hostname }}"
+
+# =============================================================================
+# Secrets (resolved by the `secrets` role — never hardcode a value here)
+# =============================================================================
+restic_backup_password: "{{ secrets_restic_password | default('') }}"
+restic_backup_password_min_length: 20
+
+# The passphrase file is seeded once and never rewritten (see
+# tasks/credentials.yml for why overwriting it locks the host out of its own
+# repository). Drift against the vault is always reported; set this to true to
+# make it stop the converge as well.
+restic_backup_password_drift_fatal: false
+
+restic_backup_s3_access_key: "{{ secrets_restic_s3_access_key | default('') }}"
+restic_backup_s3_secret_key: "{{ secrets_restic_s3_secret_key | default('') }}"
+restic_backup_s3_region: "us-east-1"
+
+restic_backup_secondary_password: "{{ secrets_restic_secondary_password | default(restic_backup_password) }}"
+restic_backup_secondary_s3_access_key: "{{ secrets_restic_secondary_s3_access_key | default('') }}"
+restic_backup_secondary_s3_secret_key: "{{ secrets_restic_secondary_s3_secret_key | default('') }}"
+
+# Notifier credentials. These land in credentials/notify.env (0400) and reach
+# bg-backup through the systemd EnvironmentFile, NOT through bg-backup.conf —
+# see templates/notify.env.j2 for the full reasoning.
+restic_backup_kuma_push_url: "{{ secrets_restic_kuma_push_url | default('') }}"
+restic_backup_teams_webhook_url: "{{ secrets_restic_teams_webhook_url | default('') }}"
+restic_backup_webhook_url: "{{ secrets_restic_webhook_url | default('') }}"
+
+# =============================================================================
+# Destructive-operation policy  (the ransomware control)
+# =============================================================================
+# restic_backup_prune_local defaults to FALSE and should stay false.
+#
+# This is NOT a performance preference. `prune` is the only operation that
+# removes data from the repository, and it needs a backend credential that can
+# delete objects. A host that holds such a credential is a host from which an
+# attacker who owns root can destroy the backups of that host — which is
+# precisely the scenario the backups exist for. Ransomware operators look for
+# exactly this credential before they encrypt anything.
+#
+# With prune_local false the host's key is scoped to write plus a delete on
+# <prefix>/locks/* only (see the bucket policy in the product's
+# repo.env.example). Retention is applied out-of-band from a management station
+# holding a separate, stronger credential; see docs/ansible.md.
+#
+# restic_backup_forget_local follows for the same reason AND for a practical
+# one: with the recommended bucket policy the host key cannot delete snapshot
+# objects at all, so a nightly `forget` would fail every night and train the
+# operators to ignore backup alerts within a fortnight.
+restic_backup_prune_local: false
+restic_backup_forget_local: false
+
+# primary|secondary — only a "primary" host may prune a repository. Derived,
+# never set by hand: two hosts pruning the same repository concurrently remove
+# pack files out from under each other.
+restic_backup_repo_role: "{{ 'primary' if restic_backup_prune_local | bool else 'secondary' }}"
+
+# forget/prune safety rails (only relevant where the above are enabled).
+restic_backup_forget_min_snapshots: 5
+restic_backup_forget_max_delete_percent: 50
+restic_backup_prune_max_unused: "5%"
+
+# Never auto-initialise by default: a typo in restic_backup_repo_base would be
+# silently "fixed" by creating a brand-new empty repository that then backs up
+# happily forever while the real one goes stale and unmonitored. Flip to true
+# only for a deliberate greenfield provisioning run.
+restic_backup_repo_init: false
+
+# =============================================================================
+# Engine and runtime
+# =============================================================================
+restic_backup_compression: "auto"         # auto|off|max
+restic_backup_pack_size_mib: ""           # empty = restic default (16)
+restic_backup_read_concurrency: ""        # lower for spinning disks
+restic_backup_limit_upload_kib: 0         # 0 = unlimited
+restic_backup_limit_download_kib: 0
+
+restic_backup_log_level: "info"           # error|warn|info|debug
+restic_backup_umask: "0077"
+restic_backup_lock_wait_seconds: 1800
+restic_backup_parallel_jobs: 0
+restic_backup_nice: 10
+restic_backup_ionice_class: 2
+restic_backup_ionice_level: 7
+restic_backup_retry_attempts: 3
+restic_backup_retry_delay_seconds: 60
+
+# =============================================================================
+# Retention defaults (BAUER GROUP house policy)
+# =============================================================================
+restic_backup_keep_last: 3
+restic_backup_keep_daily: 30
+restic_backup_keep_weekly: 8
+restic_backup_keep_monthly: 6
+restic_backup_keep_yearly: 0
+restic_backup_keep_within: ""
+restic_backup_keep_tag: "keep-forever"
+
+# =============================================================================
+# Job defaults (inherited by every job that does not override them)
+# =============================================================================
+restic_backup_one_file_system: true
+restic_backup_exclude_caches: true
+restic_backup_alert_max_age_hours: 30
+restic_backup_hook_failure: "abort"       # abort|warn
+restic_backup_random_delay: 1800
+restic_backup_priority: "low"             # low|normal|high
+
+# Extra sources appended to the system job. THIS is where a separate
+# /var/lib/docker, /srv/data or an NFS-free data mount belongs — see the
+# --one-file-system trap check in tasks/assert.yml.
+restic_backup_extra_paths: []
+
+# =============================================================================
+# Exclusions
+# =============================================================================
+# The baseline mirrors the product's share/excludes/system.exclude. Keep it on
+# unless you are replacing it wholesale with restic_backup_exclude_extra.
+restic_backup_exclude_baseline: true
+restic_backup_exclude_extra: []
+
+# =============================================================================
+# Monitoring
+# =============================================================================
+restic_backup_monitor_on: "failure"       # always|failure|never
+restic_backup_notifiers: "uptime-kuma prometheus email teams"
+restic_backup_monitor_timeout_seconds: 15
+restic_backup_kuma_maintenance: false
+restic_backup_kuma_api_url: ""
+restic_backup_kuma_maintenance_id: ""
+restic_backup_mail_to: "{{ common_alert_mail_to | default('') }}"
+restic_backup_mail_from: "{{ common_alert_mail_from | default('') }}"
+restic_backup_metrics_textfile: "/var/lib/node_exporter/textfile_collector/bg-backup.prom"
+# File PATHS leaving the host is an information disclosure; counts are not.
+restic_backup_notify_include_paths: false
+
+# =============================================================================
+# Maintenance schedules (systemd OnCalendar)
+# =============================================================================
+restic_backup_check_schedule: "Wed *-*-* 05:00:00"
+restic_backup_check_read_data_subset: "2%"
+# Rendered empty unless restic_backup_prune_local is true — a prune timer on a
+# host that must not prune is a nightly guaranteed failure.
+restic_backup_prune_schedule: "Sun *-*-* 06:00:00"
+restic_backup_verify_schedule: "*-*-01 07:00:00"
+restic_backup_copy_schedule: "*-*-* 04:30:00"
+restic_backup_maint_random_delay: 1800
+
+# =============================================================================
+# Recovery bundle (escrow)
+# =============================================================================
+# NEVER the same bucket prefix as the repository: a bucket-wide deletion must
+# not take the data and the means to recover it in one go.
+restic_backup_escrow_urls: ""
+restic_backup_escrow_local: "{{ restic_backup_statedir }}/export/bg-backup-config.tar.age"
+restic_backup_escrow_recipients_file: "{{ restic_backup_credentials_dir }}/recovery-recipients.txt"
+restic_backup_escrow_recipients: []       # age recipients, one per line
+restic_backup_escrow_max_age_days: 90
+
+# =============================================================================
+# Self-update
+# =============================================================================
+# Empty on purpose. Version drift across a fleet is an Ansible decision (see
+# restic_backup_version), not a decision each host makes for itself at 03:00.
+restic_backup_update_channel: "stable"
+restic_backup_update_schedule: ""
+
+# =============================================================================
+# systemd integration
+# =============================================================================
+# enabled  — sync unit files and arm every timer
+# disabled — sync unit files and make sure no timer is armed
+# ignored  — sync unit files and touch no timer at all
+#
+# Recommended for a NEW host: converge once with
+#   -e restic_backup_schedule_state=ignored
+# run a backup and a restore by hand, then let the default arm the timers. A
+# scheduled backup that has never been proven is false confidence with a
+# calendar entry.
+restic_backup_schedule_state: "enabled"
+
+# Units that get the EnvironmentFile drop-in. Each is only written when the
+# unit actually exists on the host, so a rename upstream degrades to "no
+# drop-in" instead of "systemd refuses to load an orphan drop-in".
+restic_backup_env_dropin_units:
+  - "bg-backup@.service"
+  - "bg-backup-check.service"
+  - "bg-backup-prune.service"
+  - "bg-backup-verify.service"
+  - "bg-backup-copy.service"
+
+# =============================================================================
+# Log rotation
+# =============================================================================
+restic_backup_manage_logrotate: true
+restic_backup_logrotate_rotate: 12
+restic_backup_logrotate_frequency: "weekly"
+
+# =============================================================================
+# Post-converge validation
+# =============================================================================
+restic_backup_run_doctor: true
+# doctor reports on things Ansible cannot fix (an unreachable bucket, a stale
+# escrow bundle). Reporting is the default; set true to make the converge fail.
+restic_backup_doctor_fatal: false
+restic_backup_config_validate: true
+
+# Remove conf.d entries this role does not manage. On by default: a job file
+# left behind by an earlier install or a hand edit would keep running on its
+# own schedule with settings nobody reviews.
+restic_backup_config_purge: true
+
+# Escape hatch for BGB_* keys this role does not model yet. Keys are asserted
+# to start with BGB_ because bg-backup's config linter rejects anything else
+# and an unknown key aborts every subsequent run.
+restic_backup_extra_config: {}
+
+# =============================================================================
+# Jobs
+# =============================================================================
+# A job is a dict; every key except `name` and `order` is optional and falls
+# back to the role-level default above. `order` becomes the numeric file
+# prefix, which is what controls execution order under `backup --all`.
+#
+# The docker job is gated on group membership: a backup host need not be a
+# Docker host, and rendering a docker-mode job on a machine without Docker
+# makes `bg-backup config validate` fail by design.
+restic_backup_jobs: >-
+  {{ restic_backup_base_jobs
+     + (restic_backup_docker_jobs if 'docker_hosts' in group_names else []) }}
+
+restic_backup_base_jobs:
+  - name: system
+    order: 10
+    description: "Full server filesystem (OS config, /home, /opt, /srv)"
+    mode: files
+    paths: ["/"]
+    extra_paths: "{{ restic_backup_extra_paths }}"
+    one_file_system: "{{ restic_backup_one_file_system }}"
+    exclude_if_present: ".nobackup"
+    tags: ["tier=os"]
+    schedule: "*-*-* 02:30:00"
+    random_delay: 1800
+    timeout: "12h"
+    priority: "low"
+    # A live, unquiesced run legitimately hits rotating logs and sockets, so
+    # restic's exit 3 is noise here rather than signal.
+    partial_is_failure: false
+    copy_to_secondary: true
+    verify_sample: 5
+
+  - name: config
+    order: 90
+    description: "bg-backup configuration, credentials and system facts"
+    mode: config
+    config_paths: ["/etc/bg-backup", "/var/lib/bg-backup/facts"]
+    # `dr bootstrap` looks for exactly this tag. Renaming it makes a bare-metal
+    # recovery unable to find the configuration it needs, at the one moment
+    # nobody has time to debug tag filters.
+    tags: ["bg-backup-config"]
+    schedule: "*-*-* 01:00:00"
+    random_delay: 300
+    timeout: "10m"
+    priority: "normal"
+    keep_last: 60
+    keep_daily: 30
+    keep_weekly: 12
+    keep_monthly: 24
+    partial_is_failure: true
+    copy_to_secondary: true
+    verify_sample: 2
+
+restic_backup_docker_jobs:
+  - name: docker
+    order: 20
+    description: "Docker compose projects: volumes, configs and database dumps"
+    mode: docker
+    docker_discover: true
+    docker_include_compose_files: true
+    docker_include_env_files: true
+    docker_include_named_volumes: true
+    docker_include_bind_mounts: true
+    docker_image_manifest: true
+    docker_network_manifest: true
+    docker_export_images: "missing"
+    docker_include_overlay2: false
+    docker_extra_paths: ["/etc/docker"]
+    db_dump: true
+    db_engines: ["postgres", "mysql", "mariadb", "mongodb", "redis"]
+    db_dump_timeout: 3600
+    db_dump_compress: false
+    db_record_counts: true
+    quiesce: "docker-pause"
+    quiesce_scope: "project"
+    quiesce_max_seconds: 300
+    tags: ["tier=docker"]
+    schedule: "*-*-* 03:00:00"
+    random_delay: 900
+    timeout: "8h"
+    # normal, not low: this job holds a container freeze open. Throttling its
+    # I/O to idle stretches a seconds-long pause into minutes of downtime.
+    priority: "normal"
+    keep_daily: 14
+    alert_max_age_hours: 26
+    # Quiesced job: an unreadable file with the containers frozen is a real
+    # signal, not the usual live-filesystem noise.
+    partial_is_failure: true
+    copy_to_secondary: true
+    verify_sample: 3
