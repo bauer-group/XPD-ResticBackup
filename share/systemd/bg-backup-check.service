@@ -1,0 +1,65 @@
+# =============================================================================
+# bg-backup - repository integrity check
+# =============================================================================
+# `restic check` verifies the repository's structure - that every referenced
+# pack, index and tree actually exists and is consistent - and, with
+# BGB_CHECK_READ_DATA_SUBSET set, re-reads and re-hashes a sampled slice of the
+# actual data.
+#
+# It is a separate timer rather than something the backup does inline because it
+# reads the WHOLE repository index and, when reading data, downloads it. Doing
+# that in the backup window would stretch every night's run for a check that is
+# only useful weekly.
+#
+# The subset size comes from the configuration, not from this unit: keeping it
+# in bg-backup.conf means one place to change it and no drifted drop-in.
+# =============================================================================
+
+[Unit]
+Description=bg-backup repository integrity check
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+Wants=network-online.target
+After=network-online.target
+
+# %N is this unit's name without the suffix ("bg-backup-check"), which the
+# notifier accepts in place of a job name.
+OnFailure=bg-backup-failure@%N.service
+
+[Service]
+Type=oneshot
+SyslogIdentifier=bg-backup-check
+UMask=0077
+WorkingDirectory=/
+
+ExecStart=/usr/local/sbin/bg-backup check
+
+# A hung check holds the repository lock and blocks the next backup, which is a
+# worse outcome than a check that did not finish. The kill is safe: check only
+# reads.
+RuntimeMaxSec=6h
+TimeoutStopSec=300
+KillMode=mixed
+
+Restart=no
+
+# Low priority: this job holds nothing down, so there is no outage to shorten.
+# best-effort, never idle - see bg-backup@.service for why idle is a trap.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# See bg-backup@.service: LoadCredential=, never EnvironmentFile=.
+# `bg-backup schedule sync` narrows this list to the files that exist.
+LoadCredential=repo.env:/etc/bg-backup/credentials/repo.env
+LoadCredential=repo.key:/etc/bg-backup/credentials/repo.key
+
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=no

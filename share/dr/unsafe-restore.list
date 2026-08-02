@@ -1,0 +1,120 @@
+# =============================================================================
+# bg-backup - restore safety classification
+# =============================================================================
+# Consulted by `restore --in-place` and by `dr run`. Format:
+#
+#   NEVER  <glob>    captured for reference, never written to the live system
+#   STAGED <glob>    restored to a staging directory, diffed, applied only on
+#                    explicit confirmation
+#   (anything not listed is AUTO)
+#
+# The classification exists because the naive full-system restore -
+# `restic restore latest --target /` - can leave a host unbootable or
+# unreachable in ways that are tedious to diagnose from a rescue console:
+# stale disk UUIDs in fstab, interface names that no longer exist, a kernel
+# whose modules were not restored with it.
+#
+# In addition to this file, a self-maintaining rule applies: for any file under
+# /etc, if it is a dpkg conffile and the newly installed package version ships a
+# different default, it is promoted from AUTO to STAGED automatically. That is
+# what keeps this list from rotting across OS upgrades.
+# =============================================================================
+
+# --- NEVER -------------------------------------------------------------------
+# Boot chain. The kernel and bootloader are reinstalled from packages, never
+# copied: a restored /boot referencing modules that were not restored with it
+# produces a host that panics on boot with no useful message.
+NEVER  /boot
+NEVER  /boot/**
+NEVER  /boot/efi/**
+NEVER  /lib/modules/**
+NEVER  /usr/lib/modules/**
+NEVER  /usr/src/**
+
+# Machine identity. systemd, journald and the DHCP DUID all derive from
+# machine-id. Restoring the old one onto a new machine produces duplicate
+# identities on the network and a journal that cannot be read as either host's.
+NEVER  /etc/machine-id
+NEVER  /var/lib/dbus/machine-id
+
+# Package manager state. Restoring dpkg's database over a freshly installed
+# system makes it believe packages are present that are not, and every
+# subsequent apt operation fails in a way that needs manual repair.
+NEVER  /var/lib/dpkg/**
+NEVER  /var/lib/apt/**
+NEVER  /var/cache/**
+
+# Container runtime internals - rebuildable, and version-bound.
+NEVER  /var/lib/docker/overlay2/**
+NEVER  /var/lib/docker/image/**
+NEVER  /var/lib/docker/containerd/**
+NEVER  /var/lib/docker/buildkit/**
+NEVER  /var/lib/docker/network/**
+NEVER  /var/lib/docker/tmp/**
+NEVER  /var/lib/containerd/**
+NEVER  /var/lib/snapd/**
+
+# Volatile and virtual.
+NEVER  /proc/**
+NEVER  /sys/**
+NEVER  /dev/**
+NEVER  /run/**
+NEVER  /tmp/**
+NEVER  /var/tmp/**
+NEVER  /lost+found/**
+NEVER  /var/lib/systemd/random-seed
+NEVER  /var/lib/systemd/coredump/**
+NEVER  /etc/mtab
+
+# Account databases are MERGED by the UID/GID reconciler, never overwritten
+# wholesale: the fresh install has system users the backup does not know about,
+# and replacing the file orphans them.
+NEVER  /etc/passwd
+NEVER  /etc/group
+NEVER  /etc/shadow
+NEVER  /etc/gshadow
+
+# --- STAGED ------------------------------------------------------------------
+# Storage layout. Old UUIDs do not exist on new hardware; a wrong fstab drops
+# the host into an emergency shell at boot.
+STAGED /etc/fstab
+STAGED /etc/crypttab
+STAGED /etc/mdadm/**
+STAGED /etc/lvm/**
+STAGED /etc/multipath*
+STAGED /etc/multipath/**
+
+# Network. Interface names change with hardware (eth0 -> ens3 -> enp0s3), and a
+# wrong netplan means a host that boots and cannot be reached - the worst
+# outcome, because it needs console access to fix.
+STAGED /etc/netplan/**
+STAGED /etc/systemd/network/**
+STAGED /etc/network/interfaces
+STAGED /etc/network/interfaces.d/**
+STAGED /etc/resolv.conf
+STAGED /etc/systemd/resolved.conf
+STAGED /etc/udev/rules.d/**
+
+# Boot configuration (the config, not the artefacts).
+STAGED /etc/default/grub
+STAGED /etc/initramfs-tools/**
+
+# Access paths. An sshd_config from an older release can reference options the
+# new OpenSSH rejects (ssh-rsa in KexAlgorithms, UsePrivilegeSeparation), and
+# sshd then refuses to start - locking you out of the machine you are recovering.
+STAGED /etc/ssh/sshd_config
+STAGED /etc/pam.d/**
+STAGED /etc/nsswitch.conf
+STAGED /etc/security/**
+
+# Firewall. Applied only after the lockout preflight proves the current SSH
+# source address is still permitted.
+STAGED /etc/iptables/**
+STAGED /etc/nftables.conf
+STAGED /etc/hosts.allow
+STAGED /etc/hosts.deny
+
+# Kernel tunables and cloud-init - both can prevent a successful boot.
+STAGED /etc/sysctl.conf
+STAGED /etc/cloud/**
+STAGED /etc/exports

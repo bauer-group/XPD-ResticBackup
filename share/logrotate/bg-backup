@@ -1,0 +1,51 @@
+# =============================================================================
+# bg-backup - log rotation
+# =============================================================================
+# Installed to /etc/logrotate.d/bg-backup.
+#
+# Two stanzas because there are two kinds of log, with the same policy but
+# different globs: the top-level ones (install.log, the append-only event
+# stream) and one file per job under jobs/.
+#
+# NO copytruncate, deliberately.
+#
+#   bg-backup's own messages are written with a fresh open()/append per line, so
+#   they follow the path and land in the new file the moment logrotate renames
+#   the old one. A running backup, however, mirrors restic's output through
+#   `tee -a`, which holds the old file descriptor open for the whole run. With
+#   copytruncate that run's remaining output would be written past a hole into a
+#   file that was just truncated - the classic sparse, half-empty rotated log.
+#   Without it, the run simply finishes writing into the renamed file, which
+#   delaycompress leaves uncompressed and readable. Losing the tail of a
+#   week-old log to a rename is a non-event; losing the middle of the log for
+#   the run you are currently debugging is not.
+#
+# maxsize (not size) keeps the weekly cadence but rotates early when a single
+# noisy run - a full --verbose restore, a repository check with 200k errors -
+# would otherwise fill the partition before Sunday.
+# =============================================================================
+
+/var/log/bg-backup/*.log /var/log/bg-backup/*.jsonl {
+    weekly
+    rotate 8
+    maxsize 100M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+}
+
+# One file per job. Same policy, separate stanza because the glob above is not
+# recursive - without this, jobs/*.log would grow without limit, which is
+# exactly the file an operator tails when something goes wrong.
+/var/log/bg-backup/jobs/*.log {
+    weekly
+    rotate 8
+    maxsize 100M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+}

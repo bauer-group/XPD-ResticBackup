@@ -1,0 +1,116 @@
+# =============================================================================
+# Job: docker - compose projects, volumes and consistent database dumps
+# =============================================================================
+# PHILOSOPHY: container filesystems are NOT backed up. overlay2 and image layers
+# are rebuildable from a registry, and restoring them ties the restore to the
+# exact Docker version and storage driver of the machine that made it - which is
+# precisely what a "restore onto a freshly installed host" must not depend on.
+#
+# What IS backed up:
+#   1. logical database dumps, streamed straight into the repository
+#   2. named volumes and bind-mount sources
+#   3. compose files, .env files, network subnets, and an image digest manifest
+#
+# A restore is therefore: install Docker -> restore (2) and (3) -> compose pull
+# and up -> load (1). `bg-backup dr plan` prints exactly that sequence.
+# =============================================================================
+
+JOB_ENABLED=1
+JOB_DESCRIPTION="Docker compose projects: volumes, configs and database dumps"
+JOB_MODE="docker"
+
+# --- Discovery ---------------------------------------------------------------
+# Uses `docker compose ls --all --format json` for project name, status and
+# config file paths, then `docker inspect` for mounts, labels and image digests.
+# Re-run `bg-backup discover` after adding a stack.
+JOB_DOCKER_DISCOVER=1
+JOB_DOCKER_PROJECTS=()              # empty = every discovered project
+JOB_DOCKER_EXCLUDE_PROJECTS=()
+
+JOB_DOCKER_INCLUDE_COMPOSE_FILES=1  # the ConfigFiles paths and their directory
+JOB_DOCKER_INCLUDE_ENV_FILES=1      # .env plus every resolved env_file:
+JOB_DOCKER_INCLUDE_NAMED_VOLUMES=1
+JOB_DOCKER_INCLUDE_BIND_MOUNTS=1
+
+# Record image digests and network subnets for the restore.
+# Subnets matter more than they look: if they are not recreated explicitly,
+# Docker assigns different ones from its address pool and every firewall rule or
+# ACL that referenced the old subnet silently stops matching.
+JOB_DOCKER_IMAGE_MANIFEST=1
+JOB_DOCKER_NETWORK_MANIFEST=1
+
+# Export image tarballs into the repository.
+#   none | missing | all
+# "missing" exports only images that have no RepoDigest - locally built and
+# never pushed, therefore unrecoverable from any registry. `discover` warns when
+# it finds one. "all" makes the backup several times larger.
+JOB_DOCKER_EXPORT_IMAGES="missing"
+
+# Last resort: the raw overlay2 tree. Off, and it should stay off.
+JOB_DOCKER_INCLUDE_OVERLAY2=0
+
+JOB_DOCKER_EXTRA_PATHS=( /etc/docker )
+
+# --- Database dumps ----------------------------------------------------------
+# Each dump streams through:
+#   restic backup --stdin-from-command -- docker exec -i <c> <dump command>
+#
+# That flag FAILS the whole backup when the dump command exits non-zero, so a
+# truncated dump can never be stored as a healthy snapshot. Piping into --stdin
+# instead would record the partial stream and report success - which is the
+# single most dangerous mistake available in this problem space.
+JOB_DB_DUMP=1
+JOB_DB_ENGINES=( postgres mysql mariadb mongodb redis )
+JOB_DB_EXCLUDE_CONTAINERS=()
+JOB_DB_DUMP_TIMEOUT="3600"
+
+# Do NOT pre-compress dumps. restic already compresses (repository format v2),
+# and plain SQL deduplicates beautifully across days at content-defined chunk
+# boundaries. A gzip or zstd stream changes wholesale after the first differing
+# byte, which destroys deduplication and multiplies repository growth.
+JOB_DB_DUMP_COMPRESS=0
+
+# Capture per-table row counts alongside each dump so `verify` can assert them
+# after a test restore. For PostgreSQL these are exact: they are taken inside
+# the same exported transaction snapshot that pg_dump used.
+JOB_DB_RECORD_COUNTS=1
+
+# --- Consistency for the file part -------------------------------------------
+# docker-pause freezes only the containers of the project currently being read,
+# for the duration of that project's file backup - typically seconds.
+JOB_QUIESCE="docker-pause"
+JOB_QUIESCE_SCOPE="project"         # project|host
+JOB_QUIESCE_MAX_SECONDS=300
+
+# --- Tags / schedule ---------------------------------------------------------
+JOB_TAGS=( tier=docker )
+JOB_SCHEDULE="*-*-* 03:00:00"
+JOB_RANDOM_DELAY="900"
+JOB_TIMEOUT="8h"
+
+# normal, not low: this job holds a quiesce window open. Throttling its I/O to
+# idle would stretch a seconds-long container freeze into minutes.
+JOB_PRIORITY="normal"
+
+# --- Retention ---------------------------------------------------------------
+JOB_KEEP_LAST="3"
+JOB_KEEP_DAILY="14"
+JOB_KEEP_WEEKLY="8"
+JOB_KEEP_MONTHLY="6"
+JOB_KEEP_YEARLY=""
+JOB_KEEP_WITHIN=""
+JOB_FORGET_AFTER_BACKUP=1
+JOB_PRUNE_AFTER_BACKUP=0
+
+# --- Hooks -------------------------------------------------------------------
+JOB_PRE_HOOKS=()
+JOB_POST_HOOKS=()
+JOB_HOOK_FAILURE="abort"
+
+# --- Monitoring --------------------------------------------------------------
+JOB_ALERT_MAX_AGE_HOURS=26
+JOB_PARTIAL_IS_FAILURE=1            # quiesced job: unreadable files are a signal
+
+# --- Downstream --------------------------------------------------------------
+JOB_COPY_TO_SECONDARY=1
+JOB_VERIFY_SAMPLE=3

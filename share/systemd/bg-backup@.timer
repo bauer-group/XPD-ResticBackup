@@ -1,0 +1,47 @@
+# =============================================================================
+# bg-backup - fallback timer template     bg-backup@<job>.timer
+# =============================================================================
+# READ THIS BEFORE ENABLING IT.
+#
+# OnCalendar= cannot be parameterised by %i. A template timer therefore carries
+# ONE schedule for every job it is instantiated for, which is not what any of
+# these jobs want: JOB_SCHEDULE is per job.
+#
+# `bg-backup schedule sync` writes a CONCRETE /etc/systemd/system/
+# bg-backup@<job>.timer for every job that has a JOB_SCHEDULE. A concrete unit
+# file takes precedence over a template, so those generated timers - not this
+# file - are what actually runs on a configured host.
+#
+# This template exists so that a hand-typed
+#     systemctl enable --now bg-backup@system.timer
+# before the first sync does something safe and visible instead of failing with
+# "Unit not found". The schedule below is the shipped default, NOT the job's.
+#
+# The correct sequence is always:
+#     bg-backup schedule sync && bg-backup schedule enable
+# =============================================================================
+
+[Unit]
+Description=bg-backup timer for job %i (fallback template - run `bg-backup schedule sync`)
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+[Timer]
+Unit=bg-backup@%i.service
+
+# Shipped default only. Set JOB_SCHEDULE in /etc/bg-backup/conf.d/<job>.conf and
+# run `bg-backup schedule sync` to get the real one.
+OnCalendar=*-*-* 02:30:00
+
+# De-synchronise a fleet. Without it every host built from the same image hits
+# the same S3 endpoint on the same second, and the backend rate-limits the
+# backup window into the working day.
+RandomizedDelaySec=1800
+
+# Catch up a run missed while the host was down. This is what makes Restart=no
+# in the service safe: a reboot or a maintenance window does not cost a night.
+Persistent=true
+
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target

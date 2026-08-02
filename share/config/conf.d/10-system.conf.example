@@ -1,0 +1,87 @@
+# =============================================================================
+# Job: system - the whole root filesystem, minus rebuildable and volatile data
+# =============================================================================
+# The job name comes from the file name: 10-system.conf -> "system".
+#   Run:   bg-backup backup system
+#   Unit:  bg-backup@system.service / .timer
+# =============================================================================
+
+JOB_ENABLED=1
+JOB_DESCRIPTION="Full server filesystem (OS config, /home, /opt, /srv)"
+JOB_MODE="files"                    # files|docker|stdin|config
+
+# --- Sources -----------------------------------------------------------------
+JOB_PATHS=( / )
+
+# --one-file-system stops restic wandering into NFS mounts, USB media and
+# container overlay mounts.
+#
+# TRAP, and doctor checks for it: it also SKIPS anything on its own filesystem.
+# If /var/lib/docker is a separate mount, this job silently omits it. Add such
+# mounts to JOB_EXTRA_PATHS explicitly.
+JOB_ONE_FILE_SYSTEM=1
+JOB_EXTRA_PATHS=()                  # e.g. ( /var/lib/docker /srv/data )
+
+# --- Exclusions --------------------------------------------------------------
+JOB_EXCLUDE_FILE="/etc/bg-backup/excludes/system.exclude"
+JOB_EXCLUDES=()                     # extra one-off patterns, restic syntax
+JOB_EXCLUDE_CACHES=1                # honour CACHEDIR.TAG
+JOB_EXCLUDE_LARGER_THAN=""          # e.g. "2G" - skip stray huge files
+JOB_EXCLUDE_IF_PRESENT=".nobackup"
+
+# --- Consistency -------------------------------------------------------------
+# none          back up the live filesystem (fast; may catch a torn write)
+# docker-pause  SIGSTOP containers for the read (seconds, no restart)
+# docker-stop   stop the whole Docker daemon for the run (heavy handed)
+# service-stop  stop the units listed in JOB_QUIESCE_UNITS
+# lvm|btrfs|zfs freeze -> block snapshot -> thaw -> back up the snapshot inside a
+#               private mount namespace. The only mode that is both consistent
+#               AND downtime-free; needs free space in the VG / a capable fs.
+JOB_QUIESCE="none"
+JOB_QUIESCE_UNITS=()
+JOB_QUIESCE_MAX_SECONDS=300         # hard cap; exceeded -> abort and un-quiesce
+JOB_SNAPSHOT_SIZE="10G"             # LVM copy-on-write space; ignored elsewhere
+
+# --- Tags --------------------------------------------------------------------
+# job=<name>, host=<fqdn>, run=<id> and bg-backup=1 are always added. Do not set
+# them here. Legacy tags from a previous setup belong here so old snapshots keep
+# matching the retention policy.
+JOB_TAGS=( tier=os )
+
+# --- Schedule ----------------------------------------------------------------
+JOB_SCHEDULE="*-*-* 02:30:00"       # systemd OnCalendar; empty = no timer
+JOB_RANDOM_DELAY="1800"
+JOB_TIMEOUT="12h"                   # RuntimeMaxSec; kills a hung run
+JOB_PRIORITY="low"                  # low|normal|high -> Nice / IOSchedulingClass
+
+# --- Retention (empty = inherit BGB_DEFAULT_*) -------------------------------
+JOB_KEEP_LAST=""
+JOB_KEEP_DAILY=""
+JOB_KEEP_WEEKLY=""
+JOB_KEEP_MONTHLY=""
+JOB_KEEP_YEARLY=""
+JOB_KEEP_WITHIN=""
+
+JOB_FORGET_AFTER_BACKUP=1           # forget is cheap (metadata only)
+JOB_PRUNE_AFTER_BACKUP=0            # prune is NOT - leave it to the prune timer
+
+# --- Hooks -------------------------------------------------------------------
+# In addition, every executable in /etc/bg-backup/hooks/system/pre.d/ and
+# post.d/ runs in lexical order. Hooks get a scrubbed environment (no backend
+# credentials) plus BGB_JOB, BGB_PHASE, BGB_HOSTNAME, BGB_RUN_ID.
+JOB_PRE_HOOKS=( /opt/bg-backup/current/share/hooks/collect-system-facts.sh )
+JOB_POST_HOOKS=()
+JOB_HOOK_FAILURE="abort"            # abort|warn
+
+# --- Monitoring --------------------------------------------------------------
+JOB_ALERT_MAX_AGE_HOURS=30
+
+# Exit 3 means "snapshot created, some files unreadable". During a live,
+# unquiesced run that is normal (rotating logs, sockets). Leave this at 0 here.
+# A quiesced job should set it to 1: unreadable files with services stopped is a
+# real signal, not noise.
+JOB_PARTIAL_IS_FAILURE=0
+
+# --- Downstream --------------------------------------------------------------
+JOB_COPY_TO_SECONDARY=1
+JOB_VERIFY_SAMPLE=5                 # files restored and hashed by `verify`

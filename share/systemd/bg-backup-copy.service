@@ -1,0 +1,69 @@
+# =============================================================================
+# bg-backup - replicate snapshots to the secondary repository (3-2-1)
+# =============================================================================
+# `restic copy` re-uploads the snapshots this host owns into a second
+# repository, usually at a different provider. It is what makes a bucket-wide
+# deletion, a compromised backend credential or a provider outage survivable.
+#
+# TWO THINGS THIS UNIT DEPENDS ON, both configuration rather than unit syntax:
+#
+#   1. BGB_SECONDARY_REPO_ENV must point at the second repository's credentials.
+#      `bg-backup schedule sync` only enables the timer when it is set, and adds
+#      the file to LoadCredential= in 10-credentials.conf.
+#
+#   2. The secondary repository must have been created with
+#        restic init --from-repo <primary> --copy-chunker-params
+#      Without matching chunker parameters every copy re-chunks the data and
+#      deduplication collapses - the second repository can end up several times
+#      the size of the first, for identical content, and nothing warns you.
+#
+# Copy is scheduled separately from the backup because it is bandwidth-bound and
+# has nothing useful to say about whether last night's backup worked.
+# =============================================================================
+
+[Unit]
+Description=bg-backup copy to the secondary repository
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+Wants=network-online.target
+After=network-online.target
+
+OnFailure=bg-backup-failure@%N.service
+
+[Service]
+Type=oneshot
+SyslogIdentifier=bg-backup-copy
+UMask=0077
+WorkingDirectory=/
+
+ExecStart=/usr/local/sbin/bg-backup copy --yes
+
+# Generous: the first copy transfers the entire repository. Later runs are
+# incremental. Killing a copy is safe - it is append-only at the destination and
+# the next run resumes with whatever is already there.
+RuntimeMaxSec=12h
+TimeoutStopSec=300
+KillMode=mixed
+
+Restart=no
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# See bg-backup@.service: LoadCredential=, never EnvironmentFile=.
+# `bg-backup schedule sync` adds secondary.env here when BGB_SECONDARY_REPO_ENV
+# is configured; it is not listed by default because a missing source file makes
+# the unit fail to start.
+LoadCredential=repo.env:/etc/bg-backup/credentials/repo.env
+LoadCredential=repo.key:/etc/bg-backup/credentials/repo.key
+
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=no

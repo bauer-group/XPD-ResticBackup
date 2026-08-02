@@ -1,0 +1,69 @@
+# =============================================================================
+# bg-backup - default exclusions for a full-filesystem job
+# =============================================================================
+# restic exclude patterns. ** matches across directory levels.
+# Excludes do NOT apply to a path passed explicitly as a backup source.
+# =============================================================================
+
+# --- Virtual and volatile filesystems ----------------------------------------
+# Never back these up: they have no persistent content, and restoring them over
+# a running system is actively harmful.
+/proc
+/sys
+/dev
+/run
+/tmp
+/var/tmp
+/mnt
+/media
+/lost+found
+
+# --- Swap --------------------------------------------------------------------
+/swap.img
+/swapfile
+/swap/**
+
+# --- Rebuildable container layers --------------------------------------------
+# Matches the house policy in IAC-NixOS modules/services/backup.nix.
+# NOTE: /var/lib/docker/volumes is deliberately NOT excluded - that is the data.
+/var/lib/docker/overlay2
+/var/lib/docker/image
+/var/lib/docker/tmp
+/var/lib/docker/buildkit
+/var/lib/docker/runtimes
+/var/lib/containerd
+/var/lib/containers/storage/overlay
+
+# --- Caches and package archives ---------------------------------------------
+/var/cache
+/var/lib/apt/lists
+/var/lib/snapd/cache
+/snap
+/root/.cache
+/home/*/.cache
+/home/*/.local/share/Trash
+/home/*/.local/share/containers
+**/node_modules/.cache
+**/.venv/**/__pycache__
+
+# --- Logs that are pure noise on restore -------------------------------------
+# The journal itself is kept: it is often the only record of what happened
+# before an incident. Only the rotated, compressed archives are dropped.
+/var/log/journal/*/*@*.journal
+/var/log/**/*.gz
+/var/log/**/*.[0-9]
+/var/log/**/*.old
+
+# --- bg-backup's own scratch --------------------------------------------------
+# Backing up the restic cache into the repository it caches is a fast way to
+# double the repository size for no benefit.
+/var/lib/bg-backup/cache
+/var/lib/bg-backup/tmp
+/var/lib/bg-backup/restore
+/var/lib/bg-backup/snap
+
+# --- Miscellaneous -----------------------------------------------------------
+/var/lib/systemd/coredump
+/var/crash
+**/.Trash-*
+**/lost+found

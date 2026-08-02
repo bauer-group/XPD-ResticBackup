@@ -1,0 +1,51 @@
+# =============================================================================
+# Job: config - bg-backup's own configuration, credentials and system facts
+# =============================================================================
+# THIS JOB SOLVES THE BOOTSTRAP PROBLEM.
+#
+# After a total loss you have nothing but the recovery card from the password
+# manager: repository URL, passphrase, backend keys. With those three,
+# `bg-backup dr bootstrap` finds this snapshot and reconstructs /etc/bg-backup
+# completely - every job, exclude, hook and the secondary repository.
+#
+# The in-repository copy is a plain tar: restic already encrypts it. Only the
+# copies pushed to BGB_ESCROW_URLS are additionally encrypted, because those
+# land on storage that is not restic-encrypted.
+#
+# It runs daily AND after every `bg-backup config edit`. The most common way
+# this whole design fails in practice is someone adding a credential and never
+# re-exporting - so `doctor` warns when the config hash has changed since the
+# last export.
+# =============================================================================
+
+JOB_ENABLED=1
+JOB_DESCRIPTION="bg-backup configuration, credentials and system facts"
+JOB_MODE="config"
+
+JOB_CONFIG_PATHS=( /etc/bg-backup /var/lib/bg-backup/facts )
+
+# The DR bootstrap looks for exactly this tag. Do not change it - a renamed tag
+# makes `dr bootstrap` unable to find the configuration it needs, at the exact
+# moment nobody has time to debug tag filters.
+JOB_TAGS=( bg-backup-config )
+
+JOB_SCHEDULE="*-*-* 01:00:00"
+JOB_RANDOM_DELAY="300"
+JOB_TIMEOUT="10m"
+JOB_PRIORITY="normal"
+
+JOB_QUIESCE="none"
+
+# Kept long and deep: this snapshot is tiny, and the one time you need it is the
+# one time you cannot get it any other way.
+JOB_KEEP_LAST="60"
+JOB_KEEP_DAILY="30"
+JOB_KEEP_WEEKLY="12"
+JOB_KEEP_MONTHLY="24"
+JOB_FORGET_AFTER_BACKUP=1
+JOB_PRUNE_AFTER_BACKUP=0
+
+JOB_ALERT_MAX_AGE_HOURS=30
+JOB_PARTIAL_IS_FAILURE=1
+JOB_COPY_TO_SECONDARY=1
+JOB_VERIFY_SAMPLE=2

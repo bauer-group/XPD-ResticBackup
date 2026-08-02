@@ -1,0 +1,29 @@
+# =============================================================================
+# bg-backup - weekly repository integrity check
+# =============================================================================
+# The OnCalendar= below is the shipped default and matches BGB_CHECK_SCHEDULE in
+# bg-backup.conf.example. `bg-backup schedule sync` overrides it from the live
+# configuration in bg-backup-check.timer.d/10-schedule.conf.
+# =============================================================================
+
+[Unit]
+Description=Weekly bg-backup repository integrity check
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+[Timer]
+Unit=bg-backup-check.service
+
+# Wednesday morning: after the nightly backups have finished and far away from
+# the Sunday prune, so the two never contend for the repository lock.
+OnCalendar=Wed *-*-* 05:00:00
+
+RandomizedDelaySec=1800
+
+# A check missed because the host was down still needs to happen - an unchecked
+# repository is exactly the one that turns out to be damaged.
+Persistent=true
+
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,164 @@
+# =============================================================================
+# bg-backup - one backup job         bg-backup@<job>.service
+# =============================================================================
+# Installed by the installer, never enabled by it. `bg-backup schedule sync`
+# writes the per-job fragments into bg-backup@<job>.service.d/ - inspect the
+# effective unit with:
+#
+#     systemctl cat bg-backup@system.service
+#
+# Nothing in this file is job-specific, which is why the SERVICE can stay a
+# template. Only the timer has to be generated per job, because OnCalendar=
+# cannot be parameterised by %i.
+# =============================================================================
+
+[Unit]
+Description=bg-backup job %i
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+Documentation=man:restic(1)
+
+# The repository is remote in every supported deployment. network-online.target
+# is a "best effort, the address is configured" barrier, not a promise that S3
+# answers - the tool retries transient backend failures itself, where it can
+# tell them apart from a wrong key or a missing repository.
+Wants=network-online.target
+After=network-online.target
+
+# Ordering only. After= against a unit that does not exist on this host is a
+# no-op, so this is safe on a server without Docker.
+After=docker.service
+After=time-sync.target
+
+# Alert on failures the process itself could not report.
+#
+# The in-process notifier runs inside bg-backup. When the process is SIGKILLed -
+# OOM killer, RuntimeMaxSec, a shutdown that outran TimeoutStopSec - no code of
+# ours runs at all, and those are precisely the failures worth waking up for: a
+# job the OOM killer takes every night looks exactly like a job that never ran.
+# OnFailure= is handled by systemd, not by us, so it survives the kill.
+OnFailure=bg-backup-failure@%i.service
+
+# NEVER Conflicts= another bg-backup unit here. Conflicts= KILLS the other unit,
+# and killing a job that has Docker paused turns a scheduling collision into an
+# outage. Serialisation is done with the tool's own mkdir locks (lib/lock.sh),
+# which make the loser WAIT and then exit 5 instead of taking the winner down.
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+SyslogIdentifier=bg-backup
+UMask=0077
+
+# Never hold a directory that a quiesce may want to unmount (LVM snapshot mount,
+# a bind mount staged by a hook). A backup process sitting in a doomed cwd is
+# the classic "target is busy" that leaves a snapshot volume behind.
+WorkingDirectory=/
+
+ExecStart=/usr/local/sbin/bg-backup backup %i
+
+# THE SAFETY NET. ExecStopPost= runs whatever happened to ExecStart - clean
+# exit, non-zero exit, SIGKILL, RuntimeMaxSec, a shutdown that killed the
+# cgroup. The tool's EXIT trap covers everything except being killed outright,
+# and being killed outright is exactly when containers are left paused or
+# stopped and a service stays down until somebody notices in the morning.
+#
+# It replays /run/bg-backup/quiesce-%i.state and is a no-op (exit 0) when the
+# EXIT trap already did the work, so it costs nothing on a normal run.
+ExecStopPost=/usr/local/sbin/bg-backup internal unquiesce --job %i --if-needed
+
+# Restart=no, deliberately.
+#
+# A failed backup is a thing to investigate, not to retry blindly: restarting
+# into the same full disk, the same wrong key or the same broken database dump
+# just multiplies the alert. Transient backend errors are already retried INSIDE
+# the tool (BGB_RETRY_ATTEMPTS), where a 500 from S3 can be told apart from a
+# real failure, and a genuinely missed run is picked up by Persistent=true on
+# the timer.
+Restart=no
+
+# Give the shutdown path room. SIGTERM reaches the tool's signal trap, which
+# un-quiesces before exiting; docker start of a heavy stack can take minutes,
+# and ExecStopPost= has to fit in here too. The systemd default of 90s would
+# SIGKILL in the middle of bringing containers back up.
+TimeoutStopSec=600
+KillMode=mixed
+KillSignal=SIGTERM
+
+# --- Resource policy ---------------------------------------------------------
+# Defaults for a job that has never been synced; `schedule sync` overrides them
+# per job from JOB_PRIORITY (low=10/7, normal=5/4, high=0/0).
+#
+# IOSchedulingClass is best-effort and MUST NOT be idle. The idle class reads
+# like the obvious choice for a backup and is a trap: on a host with sustained
+# foreground I/O an idle-class process can be starved for hours, so the run
+# overruns its window and the next timer collides with the still-running
+# previous one. Nice + best-effort yields without ever being locked out.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# --- Credentials -------------------------------------------------------------
+# LoadCredential=, never EnvironmentFile=.
+#
+# EnvironmentFile=/etc/bg-backup/credentials/repo.env would merge every value in
+# that file into the unit's environment block, and
+#   systemctl show -p Environment bg-backup@system.service
+# renders that block for ANY local user - no root required. The S3 secret and
+# the repository passphrase would be one unprivileged command away.
+#
+# LoadCredential= instead copies the file into a per-invocation ramfs that only
+# this unit's processes can read ($CREDENTIALS_DIRECTORY), unmounted when the
+# invocation ends, and systemctl never renders its contents. bg-backup opens the
+# same files directly - it runs as root - so this costs nothing and removes the
+# disclosure channel entirely.
+#
+# `bg-backup schedule sync` rewrites this list in 10-credentials.conf, narrowing
+# it to the files that actually exist and adding the optional notify.env. A
+# LoadCredential= whose source is missing makes the unit fail to START, which is
+# why the optional one is not listed here.
+LoadCredential=repo.env:/etc/bg-backup/credentials/repo.env
+LoadCredential=repo.key:/etc/bg-backup/credentials/repo.key
+
+# --- Hardening ---------------------------------------------------------------
+# Calibrated for a process whose job is to read the entire filesystem as root.
+# Anything stricter than this list breaks a real backup or a real restore, and a
+# hardening option that has to be disabled at 3am is worse than none.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+
+# ProtectSystem=full, NOT strict.
+#   full   -> /usr, /boot, /efi and /etc read-only; /var and /run stay writable.
+#   strict -> the WHOLE hierarchy read-only. That breaks the state files under
+#             /var/lib/bg-backup, the logs under /var/log/bg-backup, and - worst
+#             - /run, where the quiesce journal lives and where systemctl and
+#             the Docker socket live. A quiesce that cannot write its journal
+#             cannot be replayed by ExecStopPost=, which removes the very safety
+#             net this unit exists to provide.
+ProtectSystem=full
+
+# read-only, not tmpfs: /home is a backup SOURCE. ProtectHome=yes would hand
+# restic an empty directory and produce a snapshot that restores nothing, with
+# no error anywhere.
+ProtectHome=read-only
+
+# PrivateTmp=no, explicitly.
+# Hooks stage database dumps and manifests in /tmp and a private /tmp would hide
+# them from anything running outside this unit - including the operator
+# debugging why a dump is empty, and any sidecar process a hook talks to.
+PrivateTmp=no
+
+# NOT SET, and each for a concrete reason:
+#   PrivateDevices=      JOB_QUIESCE=lvm needs /dev/dm-* and /dev/mapper.
+#   ProtectKernelModules= the dm-snapshot module may have to be autoloaded.
+#   RestrictNamespaces=  the LVM path mounts its snapshot in a private mount
+#                        namespace, which is what keeps the snapshot invisible
+#                        to the rest of the host.
+#   CapabilityBoundingSet= a full-filesystem backup needs CAP_DAC_READ_SEARCH
+#                        and friends; trimming the set here is theatre that
+#                        breaks reading exactly the files nobody else can read.
+#   MemoryMax=/CPUQuota= a throttled backup is a longer backup, and a longer
+#                        backup holds the repository lock longer.

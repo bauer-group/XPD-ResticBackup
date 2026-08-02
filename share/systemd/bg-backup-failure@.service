@@ -1,0 +1,68 @@
+# =============================================================================
+# bg-backup - out-of-process failure notifier   bg-backup-failure@<what>.service
+# =============================================================================
+# Started by OnFailure= on every bg-backup unit. It is a SEPARATE unit for one
+# reason: the notifier inside bg-backup runs inside bg-backup, and the failures
+# that matter most are the ones where bg-backup is no longer running.
+#
+#   * the OOM killer took it            -> SIGKILL, no trap, no notification
+#   * RuntimeMaxSec expired             -> SIGKILL after TimeoutStopSec
+#   * the host shut down mid-run        -> SIGKILL
+#   * the binary itself was broken      -> exit 127 before any of our code ran
+#
+# In each case systemd is the only party left that knows something failed. It
+# starts this unit, which reads the result out of systemd and the tail out of
+# the journal, redacts it, and dispatches it through the normal notifier chain.
+#
+# The instance is either a JOB NAME (from bg-backup@%i.service) or a full
+# maintenance unit name such as "bg-backup-check" (from %N). `bg-backup internal
+# notify-failure` accepts both.
+# =============================================================================
+
+[Unit]
+Description=bg-backup failure notification for %i
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+# Webhooks and mail need the network; the journal does not. Wants=, not
+# Requires=, so a notification is still attempted (and still lands in the
+# journal and the event log) on a host whose network never came up.
+Wants=network-online.target
+After=network-online.target
+
+# NO OnFailure= here, deliberately. A failure notifier that notifies about its
+# own failure is a loop, and a loop that sends mail is an outage of its own.
+# When this unit fails, systemd logs it and `bg-backup doctor` reports it.
+
+[Service]
+Type=oneshot
+SyslogIdentifier=bg-backup-failure
+UMask=0077
+WorkingDirectory=/
+
+ExecStart=/usr/local/sbin/bg-backup internal notify-failure --unit %i
+
+# A notifier that hangs on an unreachable webhook must not sit in the unit queue
+# forever. The tool applies BGB_MONITOR_TIMEOUT_SECONDS per notifier; this is the
+# outer bound for all of them together.
+TimeoutStartSec=180
+
+# Not niced. This runs for a couple of seconds and its whole value is being
+# timely - an alert that arrives after the operator has gone home is noise.
+Nice=0
+
+# NO LoadCredential= in the shipped unit, on purpose. This unit must never fail
+# to start for want of a file: a missing credential source is a hard start
+# failure, and a failure notifier that cannot start is the one bug you find out
+# about months later. `bg-backup schedule sync` adds notify.env here in
+# 10-credentials.conf if - and only if - it exists.
+
+# --- Hardening ---------------------------------------------------------------
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=no

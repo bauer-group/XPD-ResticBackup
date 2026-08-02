@@ -1,0 +1,62 @@
+# =============================================================================
+# bg-backup - proven restore test
+# =============================================================================
+# `check` proves the repository is internally consistent. This proves the backup
+# comes BACK: it restores sampled files plus the canary written at backup time,
+# compares size and SHA-256 against the snapshot metadata, and loads each
+# database dump into a throwaway container built from the exact image digest
+# recorded in the manifest.
+#
+# It is the only unit here that answers the question anybody actually cares
+# about. A repository that checks clean and restores nothing is a failure nobody
+# discovers until the day it matters.
+#
+# PrivateTmp=no matters more here than anywhere else: verify stages restored
+# data and hands paths to a throwaway container. With a private /tmp the
+# container would mount an empty directory and the comparison would pass against
+# nothing at all.
+# =============================================================================
+
+[Unit]
+Description=bg-backup proven-restore verification
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+Wants=network-online.target
+After=network-online.target
+After=docker.service
+
+OnFailure=bg-backup-failure@%N.service
+
+[Service]
+Type=oneshot
+SyslogIdentifier=bg-backup-verify
+UMask=0077
+WorkingDirectory=/
+
+ExecStart=/usr/local/sbin/bg-backup verify
+
+# Verify starts containers. If it is killed mid-run they must still go away,
+# and the tool's own cleanup registry needs room to do that.
+RuntimeMaxSec=4h
+TimeoutStopSec=600
+KillMode=mixed
+
+Restart=no
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# See bg-backup@.service: LoadCredential=, never EnvironmentFile=.
+LoadCredential=repo.env:/etc/bg-backup/credentials/repo.env
+LoadCredential=repo.key:/etc/bg-backup/credentials/repo.key
+
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=no

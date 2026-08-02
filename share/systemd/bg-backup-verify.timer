@@ -1,0 +1,31 @@
+# =============================================================================
+# bg-backup - monthly proven-restore test
+# =============================================================================
+# Shipped default, matching BGB_VERIFY_SCHEDULE. `bg-backup schedule sync`
+# overrides it from the live configuration in
+# bg-backup-verify.timer.d/10-schedule.conf.
+# =============================================================================
+
+[Unit]
+Description=Monthly bg-backup proven-restore verification
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+[Timer]
+Unit=bg-backup-verify.service
+
+# First of the month. Monthly rather than weekly because a verify run restores
+# real data and starts real containers; the point is that it happens at all and
+# that its result is recorded as the "last proven restore" date `status` shows.
+OnCalendar=*-*-01 07:00:00
+
+RandomizedDelaySec=1800
+
+# Persistent=true matters most on this timer. A monthly job that is skipped
+# because the host happened to be down on the 1st would otherwise not run again
+# for a month, and "last proven restore" is the one figure an auditor asks for.
+Persistent=true
+
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target

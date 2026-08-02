@@ -1,0 +1,73 @@
+# =============================================================================
+# bg-backup - reclaim space (PRIMARY REPOSITORY ROLE ONLY)
+# =============================================================================
+# `forget` removes snapshot references and is cheap and safe; `prune` rewrites
+# pack files and physically deletes data. That is the difference this unit is
+# built around.
+#
+# ConditionPathExists=/etc/bg-backup/.prune-allowed is the guard rail.
+#
+# The repository backend is a shared bucket, and a prune is not scoped to a
+# host: it rewrites the whole repository. Two hosts pruning the same repository
+# concurrently can remove pack files out from under each other's index, and
+# restic's own repository lock is the only thing between that and data loss.
+# So exactly one host in a fleet may prune, the one whose configuration says
+# BGB_REPO_ROLE=primary, and `bg-backup schedule sync` writes the marker file
+# only for that host. Everywhere else the condition fails, systemd records
+# "condition failed" (which is NOT a unit failure and raises no alert), and the
+# timer can be enabled fleet-wide from one identical configuration.
+#
+# The marker is a file rather than a check inside the tool so that the guard is
+# visible in `systemctl status`, auditable with ls, and impossible to reach by
+# accident from a hand-typed `systemctl start`.
+# =============================================================================
+
+[Unit]
+Description=bg-backup repository prune (primary role only)
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+Wants=network-online.target
+After=network-online.target
+
+ConditionPathExists=/etc/bg-backup/.prune-allowed
+
+OnFailure=bg-backup-failure@%N.service
+
+[Service]
+Type=oneshot
+SyslogIdentifier=bg-backup-prune
+UMask=0077
+WorkingDirectory=/
+
+# --yes because prune is destructive and the tool refuses to proceed
+# unattended without it: confirm() will not prompt into a journal.
+ExecStart=/usr/local/sbin/bg-backup prune --yes
+
+# A cap, reluctantly. Killing a prune is not corrupting - restic writes the new
+# index before deleting anything, and an interrupted prune leaves the repository
+# consistent but with unreferenced packs that the next prune cleans up. A prune
+# that never ends, by contrast, holds the repository lock and silently stops
+# every backup on every host writing to this repository.
+RuntimeMaxSec=8h
+TimeoutStopSec=600
+KillMode=mixed
+
+Restart=no
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# See bg-backup@.service: LoadCredential=, never EnvironmentFile=.
+LoadCredential=repo.env:/etc/bg-backup/credentials/repo.env
+LoadCredential=repo.key:/etc/bg-backup/credentials/repo.key
+
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=no

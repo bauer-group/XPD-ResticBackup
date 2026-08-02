@@ -1,0 +1,35 @@
+# =============================================================================
+# bg-backup - weekly prune
+# =============================================================================
+# Shipped default, matching BGB_PRUNE_SCHEDULE. `bg-backup schedule sync`
+# overrides it from the live configuration in
+# bg-backup-prune.timer.d/10-schedule.conf.
+#
+# Enabling this timer on a secondary host is harmless: the service carries
+# ConditionPathExists=/etc/bg-backup/.prune-allowed, which only a primary has,
+# and a skipped condition is not a failure.
+# =============================================================================
+
+[Unit]
+Description=Weekly bg-backup repository prune
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+[Timer]
+Unit=bg-backup-prune.service
+
+# Sunday morning, deliberately far from both the nightly backups and the
+# Wednesday check. Prune is the only irreversible maintenance job; it never runs
+# inline with a backup, because a prune competing with a write is how a
+# repository ends up with an index nobody can explain.
+OnCalendar=Sun *-*-* 06:00:00
+
+RandomizedDelaySec=1800
+
+# A missed prune only costs storage, never data - but skipping it for months is
+# how a repository quietly triples in size.
+Persistent=true
+
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target

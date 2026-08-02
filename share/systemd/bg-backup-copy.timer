@@ -1,0 +1,32 @@
+# =============================================================================
+# bg-backup - copy to the secondary repository
+# =============================================================================
+# BGB_COPY_SCHEDULE is EMPTY by default, so `bg-backup schedule sync` leaves
+# this timer disabled and removes its schedule drop-in. The OnCalendar= below is
+# only the shipped default for a host that enables the timer by hand.
+#
+# sync enables it only when BGB_COPY_SCHEDULE and BGB_SECONDARY_REPO_ENV are
+# both set - a copy timer without a second repository would fail every night
+# with "no secondary repository configured", which is an alert that teaches
+# people to ignore alerts.
+# =============================================================================
+
+[Unit]
+Description=bg-backup copy to the secondary repository
+Documentation=https://github.com/bauer-group/XPD-ResticBackup
+
+[Timer]
+Unit=bg-backup-copy.service
+
+# Early morning, after the nightly backups: there is no point copying snapshots
+# that have not been taken yet.
+OnCalendar=*-*-* 04:30:00
+
+RandomizedDelaySec=1800
+
+Persistent=true
+
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target

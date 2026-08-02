@@ -1,0 +1,168 @@
+# =============================================================================
+# bg-backup - main configuration
+# =============================================================================
+# Managed by the operator. Installed to /etc/bg-backup/bg-backup.conf (0640).
+# An upgrade never modifies this file; new defaults land in bg-backup.conf.new.
+#
+# FORMAT: shell-sourced KEY=VALUE plus bash arrays. Every file is linted by
+# `bg-backup config validate` BEFORE it is sourced: root-owned, mode 0640 or
+# tighter, whitelisted keys only, and no command substitution. An empty value
+# means "auto-detect". Per-job files in conf.d/*.conf override everything here.
+#
+# PRECEDENCE: defaults < this file < conf.d/<job>.conf < environment < flags
+# Inspect the result with:  bg-backup config show --job <name> --resolved
+# =============================================================================
+
+# --- Identity ----------------------------------------------------------------
+# Snapshot host name. Empty = the FQDN at runtime.
+# KEEP THIS STABLE. Retention and restore filters key off it, and changing it
+# orphans every previous snapshot: they stop matching `forget --host`, so they
+# are never pruned and never restored by name.
+BGB_HOSTNAME=""
+
+# --- Repository --------------------------------------------------------------
+BGB_REPO_ENV="/etc/bg-backup/credentials/repo.env"
+
+# primary|secondary
+# Only a "primary" host may run `prune` against a repository. Every other host
+# writing into the same bucket MUST be "secondary", otherwise two hosts can
+# prune concurrently and remove pack files out from under each other.
+BGB_REPO_ROLE="primary"
+
+# Optional second repository for `bg-backup copy` (the 3-2-1 rule). Empty = off.
+# NOTE: the secondary repository must have been created with
+#   restic init --from-repo <primary> --copy-chunker-params
+# Without matching chunker parameters the copy re-chunks everything and
+# deduplication collapses - the second repo can end up many times larger.
+BGB_SECONDARY_REPO_ENV=""
+
+# --- Engine ------------------------------------------------------------------
+BGB_RESTIC_BIN="/usr/local/bin/restic"
+
+# 0.17.0 is the floor: it introduced the distinct exit codes 10/11/12 that the
+# wrapper maps to "no repository", "already locked" and "wrong password".
+# Below that everything collapses into exit 1 and alerts cannot be triaged.
+BGB_RESTIC_MIN_VERSION="0.17.0"
+
+BGB_COMPRESSION="auto"          # auto|off|max
+BGB_PACK_SIZE_MIB=""            # empty = restic default (16)
+BGB_READ_CONCURRENCY=""         # empty = restic default; lower for spinning disks
+BGB_LIMIT_UPLOAD_KIB="0"        # 0 = unlimited
+BGB_LIMIT_DOWNLOAD_KIB="0"
+
+# --- Paths -------------------------------------------------------------------
+BGB_CACHE_DIR="/var/lib/bg-backup/cache"
+BGB_TMP_DIR="/var/lib/bg-backup/tmp"
+BGB_STATE_DIR="/var/lib/bg-backup/state"
+BGB_LOG_DIR="/var/log/bg-backup"
+
+# --- Runtime behaviour -------------------------------------------------------
+BGB_LOG_LEVEL="info"            # error|warn|info|debug
+BGB_UMASK="0077"
+
+# How long a job waits for the repository lock before giving up (exit 5).
+BGB_LOCK_WAIT_SECONDS="1800"
+
+# 1 = allow two different jobs to touch the repository simultaneously.
+# Keep 0: concurrent jobs thrash I/O, and two quiescing jobs would fight over
+# the same containers.
+BGB_PARALLEL_JOBS="0"
+
+BGB_NICE="10"
+BGB_IONICE_CLASS="2"            # 1=realtime 2=best-effort 3=idle
+BGB_IONICE_LEVEL="7"            # 0 (highest) .. 7 (lowest)
+
+# Transient network/S3 failures only. A failed database dump or hook is NEVER
+# retried - retrying hides the failure it exists to surface.
+BGB_RETRY_ATTEMPTS="3"
+BGB_RETRY_DELAY_SECONDS="60"
+
+# --- Default retention (BAUER GROUP house policy) ----------------------------
+# Matches IAC-NixOS modules/services/backup.nix so both stacks agree.
+BGB_DEFAULT_KEEP_LAST="3"
+BGB_DEFAULT_KEEP_DAILY="30"
+BGB_DEFAULT_KEEP_WEEKLY="8"
+BGB_DEFAULT_KEEP_MONTHLY="6"
+BGB_DEFAULT_KEEP_YEARLY="0"
+BGB_DEFAULT_KEEP_WITHIN=""      # e.g. "14d"; additive to the counts above
+
+# Snapshots carrying this tag are never removed by `forget` (manual pin).
+BGB_KEEP_TAG="keep-forever"
+
+# --- forget/prune safety rails -----------------------------------------------
+# This is the only irreversible code path in the tool, and the repository is a
+# shared bucket, so the rails are deliberately conservative.
+BGB_FORGET_MIN_SNAPSHOTS="5"        # refuse if fewer would remain
+BGB_FORGET_MAX_DELETE_PERCENT="50"  # refuse if more than this share would go
+BGB_PRUNE_MAX_UNUSED="5%"
+
+# --- Defaults inherited by every job -----------------------------------------
+BGB_DEFAULT_EXCLUDE_FILE="/etc/bg-backup/excludes/system.exclude"
+BGB_DEFAULT_EXCLUDE_CACHES="1"      # honour CACHEDIR.TAG
+BGB_DEFAULT_ONE_FILE_SYSTEM="1"
+BGB_DEFAULT_ALERT_MAX_AGE_HOURS="30"
+
+# --- Monitoring --------------------------------------------------------------
+# always|failure|never
+BGB_MONITOR_ON="failure"
+
+# Active notifiers, in dispatch order. Each runs in a subshell with a timeout;
+# a notifier that fails never changes the job's exit code. A monitoring system
+# that can take down the backup it monitors is worse than none.
+BGB_NOTIFIERS="uptime-kuma prometheus email teams"
+
+BGB_MONITOR_TIMEOUT_SECONDS="15"
+
+# Uptime Kuma push monitor. This is the dead-man's switch: Kuma alerts when the
+# push does NOT arrive, which is the failure mode a "send mail on error" script
+# can never detect, because a job that never runs sends nothing.
+BGB_MONITOR_KUMA_PUSH_URL=""        # https://kuma.example.com/api/push/<token>
+
+# Open a Kuma maintenance window around the quiesce phase. Without this, every
+# consistent backup trips the service monitors and people learn to ignore Kuma.
+BGB_MONITOR_KUMA_MAINTENANCE="0"
+BGB_MONITOR_KUMA_API_URL=""
+BGB_MONITOR_KUMA_MAINTENANCE_ID=""
+
+# E-mail via the local MTA (msmtp on BAUER GROUP hosts). FAILURES ONLY by
+# design: a daily success mail becomes a filter rule within a week and an
+# ignored channel within a month.
+BGB_MONITOR_MAIL_TO=""              # e.g. support@support.bauer-group.com
+BGB_MONITOR_MAIL_FROM=""
+
+# Microsoft Teams incoming webhook (Power Automate / Workflows URL).
+# Treat as a credential: anyone holding it can post as the bot.
+BGB_MONITOR_TEAMS_WEBHOOK_URL=""
+
+# Generic JSON webhook.
+BGB_MONITOR_WEBHOOK_URL=""
+
+# Prometheus node_exporter textfile collector. Empty = disabled.
+# Written atomically (tmp + mv): the collector reads the directory on every
+# scrape and a half-written file is a parse error for the whole file.
+BGB_METRICS_TEXTFILE="/var/lib/node_exporter/textfile_collector/bg-backup.prom"
+
+# Send file PATHS to external endpoints. Off by default - unreadable-file counts
+# are useful, the filenames of a host are an information disclosure.
+BGB_NOTIFY_INCLUDE_PATHS="0"
+
+# --- Maintenance schedules (systemd OnCalendar) ------------------------------
+BGB_CHECK_SCHEDULE="Wed *-*-* 05:00:00"     # structural integrity
+BGB_CHECK_READ_DATA_SUBSET="2%"             # empty = metadata only
+BGB_PRUNE_SCHEDULE="Sun *-*-* 06:00:00"     # never inline with a backup
+BGB_VERIFY_SCHEDULE="*-*-01 07:00:00"       # monthly proven-restore test
+BGB_COPY_SCHEDULE=""                        # empty = no secondary copy timer
+BGB_MAINT_RANDOM_DELAY="1800"
+
+# --- Recovery bundle ---------------------------------------------------------
+# Where `config export` pushes encrypted copies. NEVER the same bucket prefix as
+# the repository: a bucket-wide deletion must not take the data and the means to
+# recover it at the same time.
+BGB_ESCROW_URLS=""
+BGB_ESCROW_LOCAL="/var/lib/bg-backup/export/bg-backup-config.tar.age"
+BGB_ESCROW_RECIPIENTS_FILE="/etc/bg-backup/credentials/recovery-recipients.txt"
+BGB_ESCROW_MAX_AGE_DAYS="90"                # doctor warns past this
+
+# --- Self-update -------------------------------------------------------------
+BGB_UPDATE_CHANNEL="stable"     # stable|edge
+BGB_UPDATE_SCHEDULE=""          # empty = manual only (recommended for a fleet)
