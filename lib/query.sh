@@ -119,13 +119,20 @@ runs_list() {
 
   # Group by the run= tag. Snapshots without one predate this tool (or were made
   # by hand) and are listed under "-" rather than hidden.
+  #
+  # Every tag extraction below is wrapped in jq's first(): a snapshot carrying
+  # two tags with the same key otherwise yields two values, jq emits one row per
+  # combination, and the run appears to contain more snapshots than it does. A
+  # duplicate kind= tag on the PostgreSQL globals dump did exactly that. That tag
+  # is fixed at the source, but a selector that miscounts whenever the data
+  # surprises it is a second, independent bug.
   printf '\n  %-24s %-14s %-6s %-20s %s\n' "RUN" "JOB" "SNAPS" "TIME" "KINDS"
   printf '%s' "${json}" | jq -r '
     [ .[] | . as $s
       | ($s.tags // []) as $t
-      | { run:  ($t[] | select(startswith("run=")) | sub("run=";"")) // "-",
-          job:  ($t[] | select(startswith("job=")) | sub("job=";"")) // "-",
-          kind: ($t[] | select(startswith("kind=")) | sub("kind=";"")) // "files",
+      | { run:  first($t[] | select(startswith("run=")) | sub("run=";"")) // "-",
+          job:  first($t[] | select(startswith("job=")) | sub("job=";"")) // "-",
+          kind: first($t[] | select(startswith("kind=")) | sub("kind=";"")) // "files",
           time: $s.time, id: $s.short_id } ]
     | group_by(.run) | map({
         run: .[0].run, job: .[0].job, n: length,

@@ -167,10 +167,20 @@ docker_project_manifest() {
     [ -n "${c}" ] || continue
     [ "${first}" -eq 0 ] && printf ','
     first=0
-    docker inspect "${c}" 2>/dev/null | jq -c '.[0] | {
+    # image_ref is the PULLABLE reference (repo@sha256:...), and it is the whole
+    # point of recording images at all. It is not in `docker inspect <container>`
+    # - RepoDigests live on the image object - so docker_image_ref() fetches it
+    # separately and it is spliced in here.
+    #
+    # image_id is the LOCAL image config ID. It identifies nothing a fresh host
+    # can obtain, so a restore that had only that would fall back to pulling the
+    # tag and silently start a different version than the data was written by.
+    local _ref; _ref="$(docker_image_ref "${c}")"
+    docker inspect "${c}" 2>/dev/null | jq -c --arg ref "${_ref}" '.[0] | {
       id: .Id[0:12],
       name: (.Name | ltrimstr("/")),
       image: .Config.Image,
+      image_ref: $ref,
       image_id: .Image,
       service: (.Config.Labels["com.docker.compose.service"] // ""),
       working_dir: (.Config.Labels["com.docker.compose.project.working_dir"] // ""),

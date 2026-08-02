@@ -518,3 +518,176 @@ JSONL
   _restic_restore_defaults argv2
   [[ "${argv2[*]}" != *"--sparse"* ]]
 }
+
+# -----------------------------------------------------------------------------
+# BUG 14: a secret containing a glob metacharacter was never redacted
+# -----------------------------------------------------------------------------
+# Layer 1 of redact() used ${s//${secret}/...}, where the needle is a GLOB
+# PATTERN, not literal text. A passphrase containing a bracket expression is
+# therefore not found and goes into the log, the notifier payload and the
+# doctor output in full. Measured: `pw[0-9]x` passed through untouched.
+@test "regression: a secret with a bracket expression is still redacted" {
+  bgb_load_lib redact
+  redact_register 'pw[0-9]x'
+  run redact "repo password is pw[0-9]x here"
+  [[ "$output" != *"pw[0-9]x"* ]]
+  [[ "$output" == *"${BGB_REDACTED}"* ]]
+}
+
+@test "regression: a secret with a star does not over-redact the whole line" {
+  bgb_load_lib redact
+  # At least 8 characters, or redact_register() drops it by design and the test
+  # would pass without ever exercising anything.
+  redact_register 'key*value123'
+  run redact "before key*value123 after"
+  [[ "$output" != *"key*value123"* ]]
+  # As a glob, key*value123 would have swallowed everything from "key" onwards.
+  [[ "$output" == *"before"* ]]
+  [[ "$output" == *"after"* ]]
+}
+
+@test "regression: str_replace_all treats both sides literally" {
+  bgb_load_lib core
+  run str_replace_all "a [x] b [x] c" "[x]" "Q"
+  [ "$output" = "a Q b Q c" ]
+
+  # The replacement must NOT be backslash-processed: a four-backslash run has to
+  # come out as four backslashes, not two.
+  run str_replace_all "pre|MARK|post" "MARK" 's/\\/\\\\/g'
+  [ "$output" = 'pre|s/\\/\\\\/g|post' ]
+
+  # Absent needle, empty needle and empty haystack must all be safe.
+  run str_replace_all "unchanged" "zzz" "Q"; [ "$output" = "unchanged" ]
+  run str_replace_all "unchanged" "" "Q";    [ "$output" = "unchanged" ]
+  run str_replace_all "" "x" "Q";            [ "$output" = "" ]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 15: splicing shell code through ${x//m/r} halved every backslash
+# -----------------------------------------------------------------------------
+# The credential preamble spliced into the MySQL/MariaDB dump script contains
+#     sed 's/\/\\/g; s/"/\\"/g'
+# and arrived in the container as
+#     sed 's/\/\/g; s/"/\"/g'
+# because bash processes backslashes in a substitution's REPLACEMENT. sed then
+# refused the expression and EVERY MySQL and MariaDB dump failed - visible only
+# from inside the container.
+@test "regression: the db credential preamble survives splicing intact" {
+  bgb_load_lib core
+  # shellcheck disable=SC1090
+  . "${BGB_LIB_DIR}/../share/db/mysql.sh"
+  local out
+  out="$(_db_mysql_script '__CREDS__')"
+
+  # grep -F, not [[ == pattern ]]: the string under test is made of backslashes
+  # and slashes, which is precisely the input that makes glob patterns and shell
+  # quoting unreadable. -F compares bytes.
+  printf '%s' "${out}" | grep -qF 's/\\/\\\\/g'
+  printf '%s' "${out}" | grep -qF 's/"/\\"/g'
+
+  # And the corrupted, backslash-halved form must NOT appear.
+  ! printf '%s' "${out}" | grep -qF 's/\/\\/g'
+}
+
+# -----------------------------------------------------------------------------
+# BUG 16: every notifier was dead - loaded inside a command substitution
+# -----------------------------------------------------------------------------
+# monitor_load_notifier() sources lib/notify/<name>.sh, which is a SIDE EFFECT
+# on the current shell. It was called as fn="$(monitor_load_notifier x)", so the
+# sourcing happened in a subshell: `declare -F` succeeded there, the name was
+# printed, and the definition died with the subshell. The parent then called a
+# name it had never seen:
+#     monitor.sh: line 501: bgb_notify_prometheus: command not found
+# No e-mail, no Teams card, no Kuma push, no metrics - ever.
+@test "regression: loading a notifier defines it in THIS shell" {
+  bgb_load_lib core config monitor
+  ! declare -F bgb_notify_prometheus >/dev/null 2>&1
+
+  monitor_load_notifier prometheus
+  [ "$?" -eq 0 ]
+  declare -F bgb_notify_prometheus >/dev/null 2>&1
+  [ "${_BGB_NOTIFY_FN}" = "bgb_notify_prometheus" ]
+}
+
+@test "regression: a hyphenated notifier name maps to an underscored function" {
+  bgb_load_lib core config monitor
+  monitor_load_notifier uptime-kuma
+  [ "$?" -eq 0 ]
+  [ "${_BGB_NOTIFY_FN}" = "bgb_notify_uptime_kuma" ]
+  declare -F bgb_notify_uptime_kuma >/dev/null 2>&1
+}
+
+@test "regression: every shipped notifier actually loads" {
+  # One file whose function name does not match its file name would silence that
+  # channel permanently, and nothing else would ever say so.
+  bgb_load_lib core config monitor
+  local f name
+  for f in "${BGB_LIB_DIR}"/notify/*.sh; do
+    name="$(basename "${f}" .sh)"
+    monitor_load_notifier "${name}" || {
+      echo "notifier ${name} did not load"
+      false
+    }
+  done
+}
+
+# -----------------------------------------------------------------------------
+# BUG 17: metrics_write_job / _check / _verify were never defined
+# -----------------------------------------------------------------------------
+# backup.sh and verify.sh called three functions that do not exist, each behind
+# `|| true`, so the only symptom was a "command not found" nobody reads - and
+# the Prometheus textfile was never written by any job. Same class as the
+# dispatcher sourcing lib/facts.sh.
+#
+# This is the general check: every function this codebase calls must exist.
+@test "regression: no lib function is called but never defined" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local files defs calls guarded missing=""
+  files="$(cd "${root}" && git ls-files '*.sh' | grep -v '^tests/helper/')"
+
+  defs="$(cd "${root}" && grep -hoE '^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(\)' ${files} \
+          | sed -E 's/^[[:space:]]*(function[[:space:]]+)?//; s/[[:space:]]*\(\)//' | sort -u)"
+
+  # `declare -F name` is this codebase's idiom for OPTIONAL dispatch - a call
+  # site that deliberately works whether or not the function exists, with a
+  # fallback (see internal.sh and quiesce_replay_state). Probing for a name is
+  # an explicit statement that its absence is expected, so it is not a defect.
+  guarded="$(cd "${root}" && grep -hoE 'declare -F [a-zA-Z_][a-zA-Z0-9_]*' ${files} \
+             | awk '{print $3}' | sort -u)"
+
+  local prefix='bgb|core|config|lock|json|redact|restic|state|usage|backup|restore|quiesce|docker|db|facts|retention|verify|secrets|dr|discover|doctor|monitor|systemd|selfupdate|metrics|query|internal|status|init|str'
+
+  # Only the FIRST token of a line, and only when that line actually starts a
+  # command. Both restrictions are load-bearing:
+  #   * extracting every matching token on the line turned arguments into
+  #     "calls" - `json_kv config_dir "..."` reported config_dir as undefined;
+  #   * a line whose predecessor ends in a backslash is a CONTINUATION, not a
+  #     command. The metric-name lists in metrics.sh are exactly that shape.
+  calls="$(cd "${root}" && awk -v pre="^[[:space:]]*(${prefix})_[a-z0-9_]+([[:space:]]|\$)" '
+      FNR == 1 { cont = 0 }
+      {
+        if (!cont && $0 ~ pre && $0 !~ /declare -F/) {
+          line = $0
+          sub(/^[[:space:]]+/, "", line)
+          sub(/[^a-zA-Z0-9_].*$/, "", line)
+          print line
+        }
+        cont = ($0 ~ /\\[[:space:]]*$/)
+      }' ${files} | sort -u)"
+
+  local c
+  for c in ${calls}; do
+    printf '%s\n' "${defs}"    | grep -qx "${c}" && continue
+    printf '%s\n' "${guarded}" | grep -qx "${c}" && continue
+    missing="${missing} ${c}"
+  done
+  [ -z "${missing}" ] || { echo "called but never defined:${missing}"; false; }
+}
+
+@test "regression: restic exit 130 and 143 have a human explanation" {
+  bgb_load_lib restic
+  run restic_explain_rc 130
+  [[ "$output" != *"unknown restic exit code"* ]]
+  run restic_explain_rc 143
+  [[ "$output" != *"unknown restic exit code"* ]]
+}

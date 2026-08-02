@@ -97,7 +97,17 @@ mkfifo "$d/ctl"
 # snapshot - alive while pg_dump runs in a different connection. Close it and
 # PostgreSQL discards the snapshot, after which pg_dump --snapshot fails with
 # "invalid snapshot identifier".
-psql -X -q -w -v ON_ERROR_STOP=1 -d "$db" -f "$d/ctl" >/dev/null 2>"$d/err" &
+# -t -A are load-bearing, not tidiness. Without them psql writes the FORMATTED
+# table into $d/snap:
+#      pg_export_snapshot
+#     ---------------------
+#      00000003-00000054-1
+#     (1 row)
+# and the `tr -d [:space:]` below then glues it into
+#     pg_export_snapshot---------------------00000003-00000054-1(1row)
+# which pg_dump rejects with "invalid snapshot identifier". Every PostgreSQL
+# dump failed this way.
+psql -X -q -t -A -w -v ON_ERROR_STOP=1 -d "$db" -f "$d/ctl" >/dev/null 2>"$d/err" &
 exec 3>"$d/ctl"
 
 # \o <file> ... \o is not cosmetic: psql block-buffers stdout when it is not a
@@ -121,6 +131,16 @@ if [ -z "$snap" ]; then
   cat "$d/err" >&2 2>/dev/null || true
   exit 1
 fi
+# An exported snapshot id is <hex>-<hex>-<digits>. Checking the shape here turns
+# "we quietly built a garbage identifier out of psql's table borders" into one
+# clear line, instead of an error from pg_dump three steps later that names the
+# corruption but not its cause.
+case "$snap" in
+  *[!0-9A-Fa-f-]*|*--*|-*|*-)
+    echo "bg-backup: refusing a malformed exported snapshot id: $snap" >&2
+    echo "bg-backup: (psql must run with -t -A, or its table formatting ends up here)" >&2
+    exit 1 ;;
+esac
 
 if [ -n "$counts" ]; then
   # SET TRANSACTION SNAPSHOT joins the exporting transaction's view of the
@@ -154,7 +174,11 @@ _db_postgres_script() {
   local body="$1"
   # Splice the credential preamble in. Done here rather than by concatenating at
   # call sites so there is exactly one definition of how credentials are found.
-  printf '%s' "${body//__CREDS__/${_DB_PG_CREDS_SH}}"
+  #
+  # str_replace_all, NOT ${body//__CREDS__/...}: see _db_mysql_script. A
+  # substitution's replacement is backslash-processed, so any escape in the
+  # spliced code loses a level - silently, and only visible inside the container.
+  str_replace_all "${body}" '__CREDS__' "${_DB_PG_CREDS_SH}"
 }
 
 # _db_postgres_sh <container> <script> [args...]
@@ -283,8 +307,13 @@ db_postgres_dump() {
 
   # 1. Cluster globals. First, and separately, so that a restore can replay them
   #    before any per-database dump that GRANTs to those roles.
+  # part=globals, NOT kind=globals: every dump snapshot already carries the
+  # mandatory kind=dbdump, so a second kind= tag put TWO values under one key.
+  # `runs list` extracts kind with `$t[] | select(startswith("kind="))`, which
+  # then yields two results and emits two rows for one snapshot - inflating the
+  # snapshot count of the run it belongs to.
   script="$(_db_postgres_script "${_DB_PG_GLOBALS_SH}")"
-  if ! _db_postgres_run "${job}" "${run}" "/db/postgres/${c}/globals.sql" "kind=globals" \
+  if ! _db_postgres_run "${job}" "${run}" "/db/postgres/${c}/globals.sql" "part=globals" \
        -- docker exec -i "${c}" sh -c "${script}" _; then
     BGB_DB_RESULT="failed"
     BGB_DB_RESULT_REASON="pg_dumpall --globals-only failed"

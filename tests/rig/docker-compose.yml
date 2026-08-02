@@ -165,6 +165,25 @@ services:
       - dr_evidence:/evidence
     networks: [rig]
 
+  # A host that runs its OWN Docker daemon, for JOB_MODE=docker. Privileged
+  # because dockerd needs it; /var/lib/docker is a volume so the storage driver
+  # gets a real filesystem. See Dockerfile.docker-victim for why the host
+  # socket is not an option.
+  docker-victim:
+    build:
+      context: ../..
+      dockerfile: tests/rig/Dockerfile.docker-victim
+      args:
+        UBUNTU_TAG: ${BGB_UBUNTU_TAG:-24.04}
+    depends_on:
+      minio-init: {condition: service_completed_successfully}
+    privileged: true
+    environment: *rig_env
+    volumes:
+      - dind_lib:/var/lib/docker
+      - dr_evidence:/evidence
+    networks: [rig]
+
   # A FRESH host that has never seen the data. It receives only what the
   # recovery sheet lists - if the rehearsal needs anything else, the sheet is
   # wrong, and that is a finding rather than an inconvenience.
@@ -186,3 +205,4 @@ volumes:
   minio_data: {}
   rest_data: {}
   dr_evidence: {}
+  dind_lib: {}

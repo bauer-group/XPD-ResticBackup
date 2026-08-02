@@ -68,14 +68,14 @@ cmd_check() {
   if [ "${rc}" -eq 0 ]; then
     state_touch check_ok "1"
     [ -n "${subset}" ] && verify_mark_subset_done
-    metrics_write_check 1 "${subset}" 2>/dev/null || true
+    metrics_write check || true
     monitor_notify check_ok "" 0 || true
     log "Repository integrity: no errors found"
     return 0
   fi
 
   state_touch check_ok "0"
-  metrics_write_check 0 "${subset}" 2>/dev/null || true
+  metrics_write check || true
   err "restic check reported problems (rc=${rc})"
   err "See ${BGB_LOG_DIR}/check.log"
   err "Do NOT prune until this is understood: prune rewrites pack files and can"
@@ -169,14 +169,14 @@ cmd_verify() {
   state_touch verify_at "$(now_iso)"
   if [ "${worst}" -eq 0 ]; then
     state_touch verify_ok "1"
-    metrics_write_verify 1 2>/dev/null || true
+    metrics_write verify || true
     monitor_notify verify_ok "" 0 || true
     printf '\n  %sEvery check passed. This backup has now been proven to restore.%s\n\n' "${C_GREEN}" "${C_RESET}" >&2
     return 0
   fi
 
   state_touch verify_ok "0"
-  metrics_write_verify 0 2>/dev/null || true
+  metrics_write verify || true
   monitor_notify verify_failed "" "${worst}" || true
   printf '\n  %sVERIFICATION FAILED. Treat this as a backup outage.%s\n\n' "${C_RED}" "${C_RESET}" >&2
   return "${EX_VERIFY}"

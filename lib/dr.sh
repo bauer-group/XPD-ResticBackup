@@ -744,7 +744,17 @@ dr_pull_images() {
       err "It is not in any registry and was never exported."
       err "The containers using it cannot be recreated."
     fi
-  done < <(jq -r '.projects[]?.containers[]? | [.image, ""] | @tsv' "${mf}" | sort -u)
+  # .image_ref, NOT a hardcoded "". The second field is the digest reference this
+  # function exists to use; with the empty string it always fell through to
+  # `docker pull <tag>`, re-resolving :latest to whatever is current - while
+  # logging "Pulling images by digest". The re-tagging below was dead code for
+  # the same reason. An operator-facing claim that is simply untrue is worse
+  # than not having the feature.
+  #
+  # image_ref may legitimately be a bare tag: an image built locally and never
+  # pushed has no RepoDigest. That case is reported by docker_warn_local_images()
+  # at backup time and handled by the exported-tarball fallback below.
+  done < <(jq -r '.projects[]?.containers[]? | [.image, (.image_ref // "")] | @tsv' "${mf}" | sort -u)
 }
 
 dr_phase_databases() {

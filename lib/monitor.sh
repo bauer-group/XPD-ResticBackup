@@ -457,16 +457,29 @@ monitor_register_secrets() {
 # what the operator writes in BGB_NOTIFIERS; the function name gets underscores
 # because a hyphenated function name, while legal in bash, cannot be called
 # through most tooling and reads like a typo in a stack trace.
+# IT SETS _BGB_NOTIFY_FN; IT DOES NOT PRINT THE NAME. That distinction is the
+# whole point. Loading a provider is a SIDE EFFECT on the current shell, and the
+# previous version was called as
+#     fn="$(monitor_load_notifier "${n}")"
+# so lib_source ran inside a command-substitution subshell: the function was
+# defined there, `declare -F` confirmed it there, the name was printed - and the
+# definition died with the subshell. The parent then invoked a name it had never
+# seen and got
+#     monitor.sh: line 501: bgb_notify_prometheus: command not found
+# for every provider. No e-mail, no Teams card, no Uptime-Kuma push, no metrics
+# file - ever. For a backup tool that is worse than a failed backup, because a
+# failure nobody hears about is indistinguishable from success.
 monitor_load_notifier() {
   local name="${1:-}" fn
+  _BGB_NOTIFY_FN=""
   fn="bgb_notify_${name//-/_}"
   if ! declare -F "${fn}" >/dev/null 2>&1; then
-    if [ -r "${BGB_LIB_DIR}/notify/${name}.sh" ]; then
-      lib_source "notify/${name}.sh"
-    fi
+    [ -r "${BGB_LIB_DIR}/notify/${name}.sh" ] || return 1
+    lib_source "notify/${name}.sh"
   fi
   declare -F "${fn}" >/dev/null 2>&1 || return 1
-  printf '%s' "${fn}"
+  _BGB_NOTIFY_FN="${fn}"
+  return 0
 }
 
 # monitor_run_guarded <function> [args...]
@@ -579,10 +592,11 @@ monitor_notify() {
       continue
     fi
 
-    if ! fn="$(monitor_load_notifier "${n}")"; then
+    if ! monitor_load_notifier "${n}"; then
       warn "Unknown notifier '${n}' - no ${BGB_LIB_DIR}/notify/${n}.sh (check BGB_NOTIFIERS)"
       continue
     fi
+    fn="${_BGB_NOTIFY_FN}"
 
     if [ "${BGB_DRY_RUN:-0}" = "1" ]; then
       log "[dry-run] would notify via ${n}: ${_BGB_EV_MSG}"
@@ -610,10 +624,12 @@ monitor_maintenance_begin() {
   [ "${BGB_MONITOR_KUMA_MAINTENANCE:-0}" = "1" ] || return 0
   [ "${BGB_DRY_RUN:-0}" = "1" ] && { log "[dry-run] would open the Kuma maintenance window"; return 0; }
 
-  if ! fn="$(monitor_load_notifier uptime-kuma)"; then
+  # Not $( ): the load is a side effect and a subshell would discard it.
+  if ! monitor_load_notifier uptime-kuma; then
     warn "BGB_MONITOR_KUMA_MAINTENANCE=1 but the uptime-kuma provider is missing"
     return 0
   fi
+  fn="${_BGB_NOTIFY_FN}"
 
   # Register the closer BEFORE opening the window. If the process dies between
   # the two, the cleanup registry still closes it. A maintenance window left

@@ -71,29 +71,36 @@ restore_is_dpkg_conffile_modified() {
 # Snapshot selection
 # -----------------------------------------------------------------------------
 # restore_resolve <selector-kind> <value> <job> <kind>
-# _restore_snapshots_json <host|""> <job> <run> <kind>
+# _restore_snapshots_json <host|""> <job> <run> <kind> [path]
 _restore_snapshots_json() {
-  local host="$1" job="$2" run="$3" kind="$4"
+  local host="$1" job="$2" run="$3" kind="$4" path="${5:-}"
   # AND, not OR. Repeated --tag flags would match a snapshot carrying ANY of
   # these, so `restore dir --job web` could resolve to the database dump of an
   # unrelated job and restore its bytes over a directory. See
   # restic_tag_filter_args() for the measurement behind this.
   local -a args=(snapshots --json)
   [ -n "${host}" ] && args+=(--host "${host}")
+  # Every database dump is its OWN single-file snapshot, all of them tagged
+  # kind=dbdump. Selecting on the tag alone therefore returns whichever engine
+  # happened to be dumped LAST, and `restic dump` then fails with
+  #     path "/db/postgres" not found in snapshot
+  # `restore db --db postgres/<c>/app.dump` could only ever work for the final
+  # dump of the run. The requested path has to be part of the selector.
+  [ -n "${path}" ] && args+=(--path "${path}")
   mapfile -t -O "${#args[@]}" args < <(restic_tag_filter_args \
     "${job:+job=${job}}" "${run:+run=${run}}" "${kind:+kind=${kind}}")
   restic_capture "${args[@]}"
 }
 
-# restore_resolve_snapshot <run> <at> <snapshot> <job> [kind] [source-host]
+# restore_resolve_snapshot <run> <at> <snapshot> <job> [kind] [source-host] [path]
 restore_resolve_snapshot() {
-  local run="$1" at="$2" snapshot="$3" job="$4" kind="${5:-files}" host="${6:-}"
+  local run="$1" at="$2" snapshot="$3" job="$4" kind="${5:-files}" host="${6:-}" path="${7:-}"
 
   if [ -n "${snapshot}" ]; then printf '%s' "${snapshot}"; return 0; fi
   require_jq
 
   local json
-  json="$(_restore_snapshots_json "${host:-${BGB_HOSTNAME}}" "${job}" "${run}" "${kind}")" || return 1
+  json="$(_restore_snapshots_json "${host:-${BGB_HOSTNAME}}" "${job}" "${run}" "${kind}" "${path}")" || return 1
 
   # DISASTER RECOVERY RUNS ON A REPLACEMENT MACHINE, and a replacement machine
   # does not have the old machine's hostname - it has whatever the installer
@@ -108,7 +115,7 @@ restore_resolve_snapshot() {
   # repository where guessing could restore another machine's data.
   if [ -z "${host}" ] && [ "$(printf '%s' "${json}" | jq 'length')" -eq 0 ]; then
     local all n
-    all="$(_restore_snapshots_json "" "${job}" "${run}" "${kind}")" || return 1
+    all="$(_restore_snapshots_json "" "${job}" "${run}" "${kind}" "${path}")" || return 1
     n="$(printf '%s' "${all}" | jq '[.[].hostname] | unique | length')"
     if [ "${n}" = "1" ]; then
       warn "No snapshot for this host (${BGB_HOSTNAME}). Using the only host in this repository: $(printf '%s' "${all}" | jq -r '.[0].hostname')"
@@ -522,11 +529,14 @@ restore_db_cmd() {
   repo_env_load
   restic_require
 
-  local snap
-  snap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" dbdump "${R_SOURCE_HOST}")"
-  [ -n "${snap}" ] || die "${EX_PRECOND}" "No database dump snapshot matches"
-
+  # Resolve by PATH as well as by tag. Every dump is its own snapshot and they
+  # all carry kind=dbdump, so without the path the newest one wins - the last
+  # engine dumped in the run - and `restic dump` then reports the requested file
+  # as missing from a snapshot that never contained it.
   local path="db/${R_DB}"
+  local snap
+  snap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" dbdump "${R_SOURCE_HOST}" "/${path}")"
+  [ -n "${snap}" ] || die "${EX_PRECOND}" "No database dump snapshot contains /${path}"
   case "${R_INTO}" in
     -)
       # Straight to stdout: the operator pipes it wherever they want. This is

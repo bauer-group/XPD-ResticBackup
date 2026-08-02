@@ -1,0 +1,39 @@
+# =============================================================================
+# bg-backup integration rig - a host that actually runs Docker
+# =============================================================================
+# JOB_MODE=docker cannot be tested without a Docker daemon, and it cannot be
+# tested against the HOST's daemon either: bg-backup reads named-volume contents
+# straight from /var/lib/docker/volumes/<name>/_data, and with a mounted host
+# socket those paths belong to a filesystem this container cannot see. The
+# containers would also be siblings rather than children, so `docker compose ls`
+# would enumerate the developer's own stacks.
+#
+# So this image runs its OWN dockerd (hence privileged, and /var/lib/docker on a
+# volume so the storage driver gets a real filesystem instead of an overlay
+# upper layer). That is a heavier rig than the DR rehearsal, which deliberately
+# uses native databases - but there is no lighter way to prove that the docker
+# backup path works, and "we never ran it" is the alternative.
+# =============================================================================
+
+ARG UBUNTU_TAG=24.04
+FROM ubuntu:${UBUNTU_TAG}
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# docker.io ships dockerd; docker-compose-v2 ships the `docker compose`
+# subcommand that lib/discover.sh calls with `compose ls --format json`.
+# iproute2 and jq are here because the daemon and the test need them, not
+# because the product does - install.sh still has to fetch its own dependencies.
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends \
+      ca-certificates curl systemd \
+      docker.io docker-compose-v2 \
+      iproute2 iptables uidmap \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY . /opt/bgb
+
+WORKDIR /opt/bgb
+ENV BGB_RIG_ROLE=docker-victim
+
+CMD ["/bin/bash"]

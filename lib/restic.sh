@@ -84,6 +84,13 @@ restic_explain_rc() {
     10) printf 'repository does not exist (has it been initialised?)' ;;
     11) printf 'repository is locked by another process (try: bg-backup unlock)' ;;
     12) printf 'wrong password / repository key' ;;
+    # restic_map_rc already classified these as EX_INTERRUPT; without the text
+    # here a cancelled run reported "unknown restic exit code 130", which reads
+    # like a bug in restic. The common cause is not a human pressing Ctrl-C: it
+    # is --stdin-from-command's dump process exiting non-zero, so restic cancels
+    # the context and the REAL error is the line above this one in the log.
+    130) printf 'interrupted (SIGINT, or a --stdin-from-command dump failed - see the error above)' ;;
+    143) printf 'terminated (SIGTERM - timeout, RuntimeMaxSec or a stop request)' ;;
     *)  printf 'unknown restic exit code %s' "${1}" ;;
   esac
 }

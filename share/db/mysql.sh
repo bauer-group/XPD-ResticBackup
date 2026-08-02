@@ -118,7 +118,11 @@ exec "$CLI" --defaults-extra-file="$cnf" --binary-mode
 EOS
 
 _db_mysql_script() {
-  printf '%s' "${1//__CREDS__/${_DB_MY_CREDS_SH}}"
+  # str_replace_all, NOT ${1//__CREDS__/...}: bash processes backslashes in a
+  # substitution's replacement, which halved every backslash run in the spliced
+  # preamble and turned its `sed 's/\\/\\\\/g; s/"/\\"/g'` into an expression
+  # sed refuses. Every MySQL and MariaDB dump failed on it.
+  str_replace_all "$1" '__CREDS__' "${_DB_MY_CREDS_SH}"
 }
 
 # _db_mysql_query <container> <sql> - stdout is tab-separated, no headers.

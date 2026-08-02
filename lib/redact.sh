@@ -96,9 +96,13 @@ redact() {
   local s="$1" secret
 
   # --- Layer 1: known literals (pure bash, no fork) --------------------------
+  # str_replace_all, NOT ${s//${secret}/...}: the latter treats the secret as a
+  # GLOB, so a passphrase containing a bracket expression is never matched and
+  # goes into the log in full. Measured: `pw[0-9]x` survived redaction intact.
+  # A generated passphrase with brackets is exactly the kind nobody re-reads.
   for secret in "${_BGB_SECRETS[@]:-}"; do
     [ -z "${secret}" ] && continue
-    s="${s//${secret}/${BGB_REDACTED}}"
+    s="$(str_replace_all "${s}" "${secret}" "${BGB_REDACTED}")"
   done
 
   # --- Layer 2: structural patterns ----------------------------------------

@@ -214,6 +214,42 @@ _bgb_tmp_cleanup() {
 }
 
 # -----------------------------------------------------------------------------
+# Strings
+# -----------------------------------------------------------------------------
+
+# str_replace_all <haystack> <needle> <replacement>
+# Replace every occurrence, treating BOTH sides as literal text.
+#
+# `${s//$needle/$repl}` is the obvious one-liner and is wrong twice over, and
+# both ways bit this codebase in production:
+#
+#   * The NEEDLE is a glob pattern. A secret containing a bracket expression is
+#     therefore not found and survives redaction verbatim - measured: the
+#     passphrase `pw[0-9]x` passed straight through redact() into logs and
+#     notifier payloads. Over-matching on `*` is the same defect pointed the
+#     other way.
+#   * The REPLACEMENT undergoes backslash processing, so every \\ collapses to
+#     \. Splicing the MariaDB credential preamble through it turned
+#         sed 's/\\/\\\\/g; s/"/\\"/g'
+#     into
+#         sed 's/\/\\/g; s/"/\"/g'
+#     which sed rejects - so EVERY MySQL and MariaDB dump failed, with the error
+#     visible only from inside the container.
+#
+# Quoting the needle inside ${s%%"$needle"*} and ${s#*"$needle"} makes bash
+# match it literally, and building the result by concatenation never lets the
+# replacement be interpreted at all.
+str_replace_all() {
+  local s="$1" needle="$2" repl="$3" out=""
+  [ -n "${needle}" ] || { printf '%s' "${s}"; return 0; }
+  while [[ "${s}" == *"${needle}"* ]]; do
+    out="${out}${s%%"${needle}"*}${repl}"
+    s="${s#*"${needle}"}"
+  done
+  printf '%s%s' "${out}" "${s}"
+}
+
+# -----------------------------------------------------------------------------
 # Preconditions
 # -----------------------------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }

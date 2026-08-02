@@ -103,7 +103,9 @@ mongorestore "$@"
 EOS
 
 _db_mongodb_script() {
-  printf '%s' "${1//__CREDS__/${_DB_MG_CREDS_SH}}"
+  # See _db_mysql_script: a substitution's replacement is backslash-processed,
+  # so splicing shell code through it silently corrupts every escape in it.
+  str_replace_all "$1" '__CREDS__' "${_DB_MG_CREDS_SH}"
 }
 
 # _db_mongodb_eval <container> <javascript>

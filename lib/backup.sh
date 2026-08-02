@@ -203,7 +203,12 @@ backup_finish() {
   local end; end="$(now_epoch)"
 
   state_write "${job}" "${status}" "${rc}" "${run_id}" "${start}" "${end}" "${snapshot}"
-  metrics_write_job "${job}" "${status}" "${rc}" "${start}" "${end}" "${snapshot}" || true
+  # metrics_write, not metrics_write_job: the latter was never written. Guarded
+  # by `|| true`, the resulting "command not found" cost nothing visible and the
+  # Prometheus textfile was simply never produced - by any job, ever. The
+  # numbers come from the state file that state_write() just updated, so the
+  # per-run arguments the old call passed were never needed here.
+  metrics_write "${job}" || true
 
   case "${status}" in
     ok)       monitor_notify success  "${job}" "${rc}" || true ;;
