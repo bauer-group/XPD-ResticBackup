@@ -18,3 +18,16 @@ source-path=SCRIPTDIR/../lib
 # additionally guarded by config_require_perms() + config_lint() before it is
 # ever executed, so silencing this does not hide a real risk.
 disable=SC1091
+
+# SC2034 - "<var> appears unused. Verify use (or export if used externally)."
+# Two protocols in this codebase are deliberately cross-module, so the variable
+# is assigned in one file and read in another:
+#   * the configuration surface (JOB_*, BGB_DEFAULT_*) - config.sh assigns,
+#     restic.sh/backup.sh/retention.sh read;
+#   * the database result protocol (BGB_DB_RESULT, BGB_DB_RESULT_REASON,
+#     BGB_DB_LAST_LOG, BGB_DB_LAST_SNAPSHOT) - share/db/<engine>.sh assigns,
+#     lib/db.sh reads.
+# Kept identical to SHELLCHECK_EXCLUDE in the Makefile and exclude-codes in
+# .github/workflows/ci.yml. When the three drift, the one that is wrong is
+# always the one nobody is looking at.
+disable=SC2034

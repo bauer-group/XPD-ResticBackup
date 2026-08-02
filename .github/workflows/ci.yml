@@ -65,7 +65,11 @@ jobs:
       # time and never will in a checkout. Every such source is guarded by
       # config_require_perms() + config_lint() before it is executed, so this
       # exclusion hides no real risk. Kept identical to .shellcheckrc.
-      exclude-codes: '["SC1091"]'
+      # SC2034 too: the configuration surface (JOB_*, BGB_DEFAULT_*) and the
+      # database result protocol (BGB_DB_RESULT*) are assigned in one module and
+      # read in another, which shellcheck cannot see. Kept identical to
+      # .shellcheckrc and to SHELLCHECK_EXCLUDE in the Makefile.
+      exclude-codes: '["SC1091","SC2034"]'
       # Recorded restic/docker JSON responses - data, not code.
       exclude-patterns: 'tests/fixtures/**'
       # CAVEAT, and the reason bin/bg-backup.sh keeps a .sh suffix it does not
