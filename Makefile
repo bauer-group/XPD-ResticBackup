@@ -18,6 +18,15 @@ BATS     := tests/helper/bats-core/bin/bats
 COMPOSE  := BGB_UBUNTU_TAG=$(UBUNTU) docker compose -f tests/rig/docker-compose.yml
 SHELLSRC := $(shell git ls-files '*.sh' '*.bash' 2>/dev/null)
 
+# MUST stay identical to exclude-codes in .github/workflows/ci.yml. When they
+# drift, `make lint` and the CI gate disagree - and the one that is wrong is
+# always the one you are not looking at.
+#   SC1091 - sourced file not followed; every lib/ module is sourced at runtime
+#            from a path that does not exist at lint time.
+#   SC2034 - "appears unused"; the config and db-result protocols are deliberately
+#            cross-module (BGB_DB_RESULT, JOB_*, BGB_DEFAULT_*).
+SHELLCHECK_EXCLUDE := SC1091,SC2034
+
 .PHONY: help version lint format format-check test test-unit test-config \
         rig-up rig-down rig-logs integration dr-rehearse \
         docs recovery-sheet submodules clean check-all
@@ -34,7 +43,7 @@ version: ## Print the tool version
 
 lint: ## Run shellcheck over every tracked shell script
 	@test -n "$(SHELLSRC)" || { echo "no shell sources tracked yet"; exit 0; }
-	shellcheck -x -S warning $(SHELLSRC)
+	shellcheck -x -S warning -e $(SHELLCHECK_EXCLUDE) $(SHELLSRC)
 
 format: ## Rewrite shell sources with shfmt
 	shfmt -i 2 -ci -bn -w bin lib share scripts tests install.sh

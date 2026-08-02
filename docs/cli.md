@@ -119,9 +119,16 @@ restore rollback --token ID
 | `--run ID` | a complete run — **the correct selector** |
 | `--at TIME` | newest complete run at or before an RFC3339 time |
 | `--snapshot ID` | one specific snapshot (surgical) |
+| `--source-host H` | the hostname **recorded in the snapshots** |
 
 Restoring by "latest" per snapshot pairs a database dump from one day with volume
 contents from another.
+
+**About `--source-host`.** A rebuilt machine does not carry the old machine's
+hostname, so restore looks for snapshots from the local host first and, finding
+none, falls back to the repository's own — naming in the log which host it chose.
+You only need the flag when one repository holds several hosts, where guessing
+could hand you another machine's data; there, restore refuses and lists them.
 
 **Safety:** the default target is a staging directory. `--in-place` stages first
 and swaps by rename, keeping the previous content as `.bgbk-old-<token>` for

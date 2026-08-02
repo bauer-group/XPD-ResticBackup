@@ -214,6 +214,23 @@ deletes — with **one deliberate exception**:
 }
 ```
 
+**Why `s3:prefix` appears on `ListBucket` and on nothing else.** IAM condition
+keys are defined *per action*, and `s3:prefix` exists only for `s3:ListBucket`.
+Attach it to a bucket-level action — `s3:GetBucketLocation`,
+`s3:ListBucketMultipartUploads` — and MinIO rejects not that statement but the
+**whole document**:
+
+```text
+mc: <ERROR> Unable to create new policy: unsupported condition keys
+    '[s3:prefix]' used for action 's3:GetBucketLocation'.
+```
+
+Neither action is needed here: measured in the integration rig against MinIO
+with restic 0.19.1, this policy drives `init`, `backup`, `snapshots` and `check`
+successfully both with and without an explicit region. If a different S3 provider
+does require them, give them their own statement with **no** `Condition` block —
+do not fold them into `ListOnlyThisPrefix`.
+
 **Why `DeleteObject` is allowed under `locks/` and nowhere else.** restic is not
 a lock-free format. Every run writes a lock object into `<prefix>/locks/` and
 removes it on exit. Deny deletes outright and the lock is never cleaned up: the

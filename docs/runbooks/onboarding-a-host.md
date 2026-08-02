@@ -22,7 +22,7 @@ Ein eigener Service-Account **pro Host**, auf das eigene Prefix beschränkt:
   "Statement": [
     { "Sid": "ListOwnPrefix",
       "Effect": "Allow",
-      "Action": ["s3:ListBucket","s3:GetBucketLocation"],
+      "Action": ["s3:ListBucket"],
       "Resource": ["arn:aws:s3:::backup-server"],
       "Condition": { "StringLike": { "s3:prefix": ["<fqdn>/*"] } } },
     { "Sid": "ReadWriteOwnPrefix",
@@ -37,6 +37,28 @@ Ein eigener Service-Account **pro Host**, auf das eigene Prefix beschränkt:
 }
 ```
 
+> **`s3:prefix` gehört ausschließlich an `s3:ListBucket`.** Die Bedingung ist
+> pro Action definiert. Steht sie an einer Bucket-Level-Action wie
+> `s3:GetBucketLocation` oder `s3:ListBucketMultipartUploads`, weist MinIO nicht
+> die Zeile, sondern das **gesamte** Policy-Dokument zurück:
+>
+> ```text
+> mc: <ERROR> Unable to create new policy: unsupported condition keys
+>     '[s3:prefix]' used for action 's3:GetBucketLocation'.
+> ```
+>
+> Eine frühere Fassung dieses Runbooks hatte `GetBucketLocation` mit in die
+> `ListOwnPrefix`-Statement gezogen; wer sie kopiert hat, bekam gar keine Policy.
+> Gegen MinIO mit restic 0.19.1 wird `GetBucketLocation` nicht benötigt (im Rig
+> mit und ohne gesetzte Region verifiziert). Verlangt ein anderer S3-Anbieter es,
+> gehört es in ein **eigenes Statement ohne** Bedingung:
+>
+> ```json
+> { "Sid": "BucketLevel", "Effect": "Allow",
+>   "Action": ["s3:GetBucketLocation"],
+>   "Resource": ["arn:aws:s3:::backup-server"] }
+> ```
+>
 > **`DeleteObject` nur unter `locks/`.** restic schreibt bei jedem Lauf ein
 > Lock-Objekt und räumt es beim Beenden weg. Ein pauschales Delete-Verbot lässt
 > nach jedem Lauf ein Stale Lock zurück, und ab dem dritten Lauf braucht das

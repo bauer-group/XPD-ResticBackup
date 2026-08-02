@@ -69,16 +69,29 @@ sect "3. systemd units are syntactically valid"
 
 # No PID 1 in this container, so verify rather than start. That is what the
 # harness can honestly prove; started timers are the VM rehearsal's job.
-if command -v systemd-analyze >/dev/null 2>&1; then
+# A PASS for "not checked" is how a whole section stops testing anything without
+# anyone noticing - which is precisely what happened: on 22.04 systemd was
+# absent, install_units() skipped, the unit file never existed, and the
+# EnvironmentFile assertion "passed" by grepping a file that was not there.
+# The victim image now installs systemd deliberately, so absence is a defect.
+if ! command -v systemd-analyze >/dev/null 2>&1; then
+  bad "systemd-analyze is missing - unit syntax was NOT verified on this image"
+elif [ ! -f /etc/systemd/system/bg-backup@.service ]; then
+  bad "the unit was never installed - nothing in this section was verified"
+else
   systemd-analyze verify /etc/systemd/system/bg-backup@.service >/tmp/unit.log 2>&1
   ck $? "systemd-analyze accepts bg-backup@.service"
-else
-  ok "systemd-analyze unavailable - unit syntax not checked here"
 fi
 
-grep -q 'LoadCredential=' /etc/systemd/system/bg-backup@.service
+[ -f /etc/systemd/system/bg-backup@.service ]
+ck $? "the unit file exists"
+
+grep -q 'LoadCredential=' /etc/systemd/system/bg-backup@.service 2>/dev/null
 ck $? "the unit uses LoadCredential= (not EnvironmentFile=)"
-! grep -q 'EnvironmentFile=.*repo\.' /etc/systemd/system/bg-backup@.service
+# Anchored to a DIRECTIVE, not to the word: the unit carries a comment block
+# explaining why EnvironmentFile= is not used, and an unanchored grep matched
+# that explanation and failed a unit that was correct.
+! grep -qE '^[[:space:]]*EnvironmentFile=' /etc/systemd/system/bg-backup@.service
 ck $? "no credential is passed via EnvironmentFile="
 
 # -----------------------------------------------------------------------------
@@ -133,11 +146,29 @@ install -d /srv/data/locked
 echo secret >/srv/data/locked/file
 chmod 000 /srv/data/locked
 
-bg-backup backup e2e >/tmp/backup3.log 2>&1
-RC=$?
-[ "${RC}" -eq 3 ]; ck $? "exit 3 on an unreadable source (got ${RC})"
+# chmod 000 does NOT stop root: CAP_DAC_OVERRIDE is in Docker's default
+# capability set, so the backup read the file happily and returned 0. The test
+# passed vacuously in the only direction that matters. Dropping the capability
+# from the bounding set makes even uid 0 subject to the permission check, since
+# for a root exec the kernel derives the new permitted set from the bounding
+# set. Verified in this rig: the plain read succeeds, the setpriv read is denied.
+if command -v setpriv >/dev/null 2>&1 \
+   && ! setpriv --bounding-set=-dac_override,-dac_read_search \
+        cat /srv/data/locked/file >/dev/null 2>&1; then
+  setpriv --bounding-set=-dac_override,-dac_read_search \
+    bg-backup backup e2e >/tmp/backup3.log 2>&1
+  RC=$?
+  [ "${RC}" -eq 3 ]; ck $? "exit 3 on an unreadable source (got ${RC})"
+else
+  bad "cannot revoke DAC_OVERRIDE here - the exit-3 path was NOT exercised"
+fi
 
+# Remove the fixture, do not merely unlock it. Its whole purpose was to be
+# absent from the snapshot, so leaving it in the live tree makes the later
+# `diff -r live restored` report "Only in /srv/data: locked" - a correct restore
+# failing an assertion about a file that was deliberately never backed up.
 chmod 755 /srv/data/locked
+rm -rf /srv/data/locked
 
 if [ -n "${BGB_METRICS_TEXTFILE:-}" ] || [ -d /var/lib/node_exporter/textfile_collector ]; then
   find /var/lib/node_exporter/textfile_collector -name 'bg-backup.prom' -size +0c >/dev/null 2>&1
@@ -151,14 +182,28 @@ sect "7. forget refuses to delete everything"
 
 # A configuration with no keep-* must be read as "misconfigured", never as
 # "keep nothing".
-sed -i 's/^JOB_KEEP_LAST=.*/JOB_KEEP_LAST=""/' /etc/bg-backup/conf.d/50-e2e.conf
+#
+# Blanking JOB_KEEP_LAST alone does NOT produce that state: the job inherits
+# BGB_DEFAULT_KEEP_LAST/DAILY/WEEKLY/MONTHLY from bg-backup.conf, so a policy
+# still existed and forget correctly did its job. The assertion was measuring
+# inheritance, not the safety rail. Both levels have to be empty.
+cp /etc/bg-backup/bg-backup.conf /tmp/bg-backup.conf.bak
+cp /etc/bg-backup/conf.d/50-e2e.conf /tmp/50-e2e.conf.bak
+sed -i 's/^\(BGB_DEFAULT_KEEP_[A-Z]*\)=.*/\1=""/' /etc/bg-backup/bg-backup.conf
+sed -i 's/^\(JOB_KEEP_[A-Z]*\)=.*/\1=""/'          /etc/bg-backup/conf.d/50-e2e.conf
+
+grep -qE '^BGB_DEFAULT_KEEP_[A-Z]+=""' /etc/bg-backup/bg-backup.conf
+ck $? "the no-policy state was actually established"
+
 bg-backup forget --job e2e --apply --yes >/tmp/forget.log 2>&1
 RC=$?
 [ "${RC}" -eq 9 ]; ck $? "forget with no policy exits 9 (EX_SAFETY), got ${RC}"
 
 N="$(bg-backup snapshots --job e2e --json 2>/dev/null | jq 'length')"
 [ "${N}" != "0" ]; ck $? "no snapshot was deleted"
-sed -i 's/^JOB_KEEP_LAST=.*/JOB_KEEP_LAST="5"/' /etc/bg-backup/conf.d/50-e2e.conf
+
+cp /tmp/bg-backup.conf.bak /etc/bg-backup/bg-backup.conf
+cp /tmp/50-e2e.conf.bak    /etc/bg-backup/conf.d/50-e2e.conf
 
 # -----------------------------------------------------------------------------
 sect "8. restore reproduces content AND metadata"
@@ -169,8 +214,13 @@ ck $? "restore exits 0"
 R="$(find /tmp/restore -type d -name data 2>/dev/null | head -n1)"
 [ -n "${R}" ]; ck $? "the restored tree was found"
 
-diff -r /srv/data "${R}" >/dev/null 2>&1
-ck $? "content is identical"
+if diff -r /srv/data "${R}" >/tmp/tree.diff 2>&1; then
+  ok "content is identical"
+else
+  bad "content is identical"
+  # An assertion that only says "differs" costs an hour to chase. Say what.
+  sed 's/^/      /' /tmp/tree.diff | head -20
+fi
 
 # A checksum-only assertion misses exactly the things that actually go wrong.
 [ -L "${R}/link.txt" ]; ck $? "the symlink is still a symlink"

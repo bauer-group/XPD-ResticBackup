@@ -25,7 +25,15 @@ _bgb_resolve_self() {
     src="$(readlink "${src}")"
     [[ "${src}" != /* ]] && src="${dir}/${src}"
   done
-  cd -P "$(dirname "${src}")" && pwd
+  # A bare `cd … && pwd` would make an unreachable directory abort the whole
+  # process under `set -e` with no message at all, before logging even exists.
+  # Say what went wrong instead: this runs before any library is sourced, so
+  # there is no die() yet.
+  cd -P "$(dirname "${src}")" 2>/dev/null || {
+    printf 'bg-backup: cannot resolve its own location from %s\n' "${src}" >&2
+    exit 1
+  }
+  pwd
 }
 
 BGB_BIN_DIR="$(_bgb_resolve_self)"
@@ -229,7 +237,12 @@ dispatch() {
       "cmd_${cmd}" "${args[@]:-}" ;;
 
     dr)
-      lib_source config.sh; lib_source restic.sh; lib_source facts.sh
+      # No facts.sh: collection is the standalone pre-hook
+      # share/hooks/collect-system-facts.sh, and consumption is dr.sh reading
+      # BGB_FACTS_DIR directly. Sourcing a module that was never written made
+      # EVERY `bg-backup dr` subcommand abort before its first line - including
+      # `dr bootstrap`, the one command a recovered host has to run first.
+      lib_source config.sh; lib_source restic.sh
       lib_source restore.sh; lib_source secrets.sh; lib_source dr.sh
       cmd_dr "${args[@]:-}" ;;
 

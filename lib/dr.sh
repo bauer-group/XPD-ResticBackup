@@ -351,8 +351,10 @@ dr_plan_render() {
   printf '\n%s6. DATABASE DUMPS%s\n\n' "${C_BOLD}" "${C_RESET}"
   if ( repo_env_load ) >/dev/null 2>&1 && have jq; then
     repo_env_load >/dev/null 2>&1 || true
-    local -a args=(snapshots --json --tag kind=dbdump)
-    [ -n "${run}" ] && args+=(--tag "run=${run}")
+    local -a args=(snapshots --json)
+    # AND: dumps OF THIS RUN. The OR form would list every dump ever taken and
+    # present them as belonging to the run being planned.
+    mapfile -t -O "${#args[@]}" args < <(restic_tag_filter_args kind=dbdump "${run:+run=${run}}")
     restic_capture "${args[@]}" 2>/dev/null \
       | jq -r 'sort_by(.time) | .[] | "    - \(.short_id)  \(.time[0:19])  \((.tags//[]) | map(select(startswith("container="))) | join(""))"' \
       2>/dev/null | tail -n 20
@@ -728,7 +730,10 @@ dr_pull_images() {
     log "Registry pull failed for ${tag} - looking for an exported copy"
     local safe; safe="$(printf '%s' "${tag}" | tr -c 'A-Za-z0-9._-' '_')"
     local isnap
-    isnap="$(restic_capture snapshots --json --tag kind=image --tag "image=${tag}" 2>/dev/null \
+    # AND, and here the OR form was actively dangerous: it would have matched
+    # EVERY exported image, taken the most recent one, and `docker load`ed the
+    # wrong image under the right name during a disaster recovery.
+    isnap="$(restic_capture snapshots --json --tag "kind=image,image=${tag}" 2>/dev/null \
              | jq -r 'sort_by(.time) | last | .short_id // empty')"
     if [ -n "${isnap}" ]; then
       restic_exec dump "${isnap}" "/images/${safe}.tar" | docker load \

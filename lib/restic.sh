@@ -93,15 +93,40 @@ restic_explain_rc() {
 # -----------------------------------------------------------------------------
 
 # restic_exec <args...> - run restic, stream to stderr, return restic's status.
+# _restic_restore_defaults <array-name> - add --sparse to a `restore` argv.
+#
+# Without it restic materialises every hole: the rehearsal's 1 GiB sparse file
+# came back as 1 GiB of real blocks (apparent 1073741824, actual 1073745920).
+# On a recovery host that is not cosmetic - a sparse database or VM image can
+# exhaust the disk mid-restore, and the restore that fails is the one you are
+# running because everything else already failed.
+#
+# Applied centrally rather than at each call site: there are eight of them
+# across restore.sh and dr.sh, and one forgotten site is exactly how this
+# survives. --sparse has existed since restic 0.14, well below the 0.17 floor,
+# and is a no-op for files without holes.
+_restic_restore_defaults() {
+  local -n _bgb_argv="$1"
+  [ "${_bgb_argv[0]:-}" = "restore" ] || return 0
+  local x
+  for x in "${_bgb_argv[@]}"; do
+    [ "${x}" = "--sparse" ] && return 0
+  done
+  _bgb_argv+=(--sparse)
+  return 0
+}
+
 restic_exec() {
   local rc=0
+  local -a argv=("$@")
+  _restic_restore_defaults argv
   if [ "${BGB_DRY_RUN}" = "1" ]; then
-    log "[dry-run] restic $*"
+    log "[dry-run] restic ${argv[*]}"
     return 0
   fi
-  debug "restic $*"
+  debug "restic ${argv[*]}"
   set +e
-  "${BGB_RESTIC_BIN}" "$@"
+  "${BGB_RESTIC_BIN}" "${argv[@]}"
   rc=$?
   set -e
   return "${rc}"
@@ -111,13 +136,15 @@ restic_exec() {
 restic_exec_logged() {
   local logfile="$1"; shift
   local rc=0
+  local -a argv=("$@")
+  _restic_restore_defaults argv
   if [ "${BGB_DRY_RUN}" = "1" ]; then
-    log "[dry-run] restic $*"
+    log "[dry-run] restic ${argv[*]}"
     return 0
   fi
-  debug "restic $*"
+  debug "restic ${argv[*]}"
   set +e
-  "${BGB_RESTIC_BIN}" "$@" 2>&1 | tee -a "${logfile}"
+  "${BGB_RESTIC_BIN}" "${argv[@]}" 2>&1 | tee -a "${logfile}"
   rc="${PIPESTATUS[0]}"   # NOT $? - that is tee's status
   set -e
   return "${rc}"
@@ -125,12 +152,36 @@ restic_exec_logged() {
 
 # restic_capture <args...> - capture stdout, return restic's status.
 restic_capture() {
-  local out rc=0
+  local out rc=0 ef line
+  # stdout is DATA (usually JSON) and must stay clean, so restic's stderr is
+  # kept apart. It used to be discarded outright - which meant "wrong password",
+  # "repository does not exist" and "access denied" all arrived at the caller as
+  # a bare non-zero status. Under `set -e` an assignment from here then aborted
+  # the process with exit 1 and not one line of explanation. Diagnosing that
+  # needed `bash -x`; nobody does that at 03:00.
+  ef="$(mktemp "${TMPDIR:-/tmp}/bgb-restic-err.XXXXXX" 2>/dev/null)" || ef=""
+
   set +e
-  out="$("${BGB_RESTIC_BIN}" "$@" 2>/dev/null)"
+  if [ -n "${ef}" ]; then
+    out="$("${BGB_RESTIC_BIN}" "$@" 2>"${ef}")"
+  else
+    out="$("${BGB_RESTIC_BIN}" "$@" 2>/dev/null)"
+  fi
   rc=$?
   set -e
+
   printf '%s' "${out}"
+
+  # Only on failure: a probe like restic_is_locked() is expected to fail and
+  # callers that genuinely want silence already redirect. err() routes through
+  # _bgb_emit, so this is redacted like everything else - a repository URL can
+  # carry credentials.
+  if [ "${rc}" -ne 0 ] && [ -n "${ef}" ] && [ -s "${ef}" ]; then
+    while IFS= read -r line; do
+      [ -n "${line}" ] && err "restic: ${line}"
+    done <"${ef}"
+  fi
+  [ -n "${ef}" ] && rm -f "${ef}"
   return "${rc}"
 }
 
@@ -192,6 +243,32 @@ restic_tag_args() {
   return 0
 }
 
+# restic_tag_filter_args <term...> - a SELECTOR over tags, with AND semantics.
+#
+# restic's --tag is an OR over tag LISTS, and a list is one comma-separated
+# --tag argument. So `--tag a --tag b` means "a OR b", while `--tag a,b` means
+# "a AND b". Measured against restic 0.19.1 rather than remembered, on a
+# snapshot tagged job=e2e but NOT kind=files:
+#
+#   --tag job=e2e --tag kind=files   -> 1 hit   (OR: matched on job= alone)
+#   --tag job=e2e,kind=files         -> 0 hits  (AND: correct)
+#
+# Every selector in this tool means AND - "the files snapshot OF THIS RUN",
+# never "anything that is either". Read the OR form as a silent bug: it does not
+# fail, it returns the WRONG snapshot, and a restore then writes the wrong data.
+#
+# Writing tags is the opposite case: `restic backup --tag a --tag b` correctly
+# assigns both. That path is restic_tag_args() and must keep repeating --tag.
+restic_tag_filter_args() {
+  local joined="" t
+  for t in "$@"; do
+    [ -n "${t}" ] || continue
+    if [ -z "${joined}" ]; then joined="${t}"; else joined="${joined},${t}"; fi
+  done
+  [ -n "${joined}" ] && printf -- '--tag\n%s\n' "${joined}"
+  return 0
+}
+
 # restic_build_backup_args <job> <run-id>
 # Emits the complete argv for `restic backup`, one entry per line.
 # NOTE: no secret ever appears here. The passphrase reaches restic through
@@ -207,6 +284,13 @@ restic_build_backup_args() {
   printf -- '--json\n'
 
   restic_tag_args "${job}" "${run_id}" "${JOB_TAGS[@]:-}"
+
+  # kind=files is what makes this snapshot FINDABLE. restore, `runs diff`, the
+  # DR planner and - most importantly - the printed recovery sheet all select on
+  # kind=, and the docker path already tags its file snapshot this way. Without
+  # it a files-mode snapshot is written correctly and can never be selected
+  # again by name, which is the failure mode a backup tool must not have.
+  printf -- '--tag\nkind=files\n'
 
   [ "${JOB_ONE_FILE_SYSTEM:-0}" = "1" ] && printf -- '--one-file-system\n'
   [ "${JOB_EXCLUDE_CACHES:-0}" = "1" ]  && printf -- '--exclude-caches\n'
@@ -236,8 +320,8 @@ restic_snapshots_json() {
 restic_latest_snapshot() {
   local job="$1" tag="${2:-}"
   require_jq
-  local -a args=(snapshots --json --host "${BGB_HOSTNAME}" --tag "job=${job}")
-  [ -n "${tag}" ] && args+=(--tag "${tag}")
+  local -a args=(snapshots --json --host "${BGB_HOSTNAME}")
+  mapfile -t -O "${#args[@]}" args < <(restic_tag_filter_args "job=${job}" "${tag}")
   restic_capture "${args[@]}" | jq -r 'sort_by(.time) | last | .short_id // empty'
 }
 

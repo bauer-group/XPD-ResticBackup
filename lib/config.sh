@@ -116,6 +116,13 @@ config_key_suggest() {
     if [ "${score}" -gt "${best_score}" ]; then best_score="${score}"; best="${k}"; fi
   done
   [ "${best_score}" -ge 4 ] && printf '%s' "${best}"
+
+  # No near match is the ORDINARY case, not an error - and the caller assigns
+  # this in `hint="$(config_key_suggest ...)"`, so returning 1 would abort the
+  # linter under `set -e` at exactly the moment it had something to report. The
+  # unknown key would then never be printed. Same shape as the bug that killed
+  # restore_parse_common(); see tests/unit/regressions.bats.
+  return 0
 }
 
 # -----------------------------------------------------------------------------

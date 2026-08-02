@@ -15,8 +15,19 @@ FROM ubuntu:${UBUNTU_TAG}
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# systemd is here ON PURPOSE, and it is the one exception to "deliberately
+# bare". Every real Ubuntu server has it; these images have none. On 24.04 the
+# installer's own apt dependencies happened to drag it in, on 22.04 they did
+# not - so `install_units()` silently skipped, the unit file never existed, and
+# section 3 of the installer test asserted nothing on the OLDEST target. That is
+# exactly where it matters: LoadCredential= needs systemd 247, and jammy's 249 is
+# the closest thing we ship to. Unit coverage must not depend on an accident of
+# the dependency graph.
+#
+# It is installed, never booted: PID 1 is the test script and the harness only
+# runs `systemd-analyze verify`.
 RUN apt-get update -qq \
- && apt-get install -y -qq --no-install-recommends ca-certificates curl \
+ && apt-get install -y -qq --no-install-recommends ca-certificates curl systemd \
  && rm -rf /var/lib/apt/lists/*
 
 # The product under test, mounted at a path the e2e scripts know. SOURCE_DIR in

@@ -161,6 +161,11 @@ SELECTOR (how a point in time is chosen)
   --at TIME       Newest complete run at or before an RFC3339 timestamp
   --snapshot ID   One specific restic snapshot (surgical use)
   --job NAME      Restrict to a job
+  --source-host H The hostname RECORDED IN THE SNAPSHOTS. A rebuilt machine has
+                  a new hostname, so restore looks at the local one first and
+                  then falls back to the repository's own - naming which it
+                  used. Needed only when one repository holds several hosts,
+                  where guessing could hand you another machine's data.
 
 FLAGS
   --to DIR              Restore into a staging directory (DEFAULT)

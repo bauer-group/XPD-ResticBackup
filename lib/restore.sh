@@ -71,18 +71,57 @@ restore_is_dpkg_conffile_modified() {
 # Snapshot selection
 # -----------------------------------------------------------------------------
 # restore_resolve <selector-kind> <value> <job> <kind>
+# _restore_snapshots_json <host|""> <job> <run> <kind>
+_restore_snapshots_json() {
+  local host="$1" job="$2" run="$3" kind="$4"
+  # AND, not OR. Repeated --tag flags would match a snapshot carrying ANY of
+  # these, so `restore dir --job web` could resolve to the database dump of an
+  # unrelated job and restore its bytes over a directory. See
+  # restic_tag_filter_args() for the measurement behind this.
+  local -a args=(snapshots --json)
+  [ -n "${host}" ] && args+=(--host "${host}")
+  mapfile -t -O "${#args[@]}" args < <(restic_tag_filter_args \
+    "${job:+job=${job}}" "${run:+run=${run}}" "${kind:+kind=${kind}}")
+  restic_capture "${args[@]}"
+}
+
+# restore_resolve_snapshot <run> <at> <snapshot> <job> [kind] [source-host]
 restore_resolve_snapshot() {
-  local run="$1" at="$2" snapshot="$3" job="$4" kind="${5:-files}"
+  local run="$1" at="$2" snapshot="$3" job="$4" kind="${5:-files}" host="${6:-}"
 
   if [ -n "${snapshot}" ]; then printf '%s' "${snapshot}"; return 0; fi
   require_jq
 
-  local -a args=(snapshots --host "${BGB_HOSTNAME}" --json)
-  [ -n "${job}" ] && args+=(--tag "job=${job}")
-  [ -n "${run}" ] && args+=(--tag "run=${run}")
-  [ -n "${kind}" ] && args+=(--tag "kind=${kind}")
+  local json
+  json="$(_restore_snapshots_json "${host:-${BGB_HOSTNAME}}" "${job}" "${run}" "${kind}")" || return 1
 
-  local json; json="$(restic_capture "${args[@]}")" || return 1
+  # DISASTER RECOVERY RUNS ON A REPLACEMENT MACHINE, and a replacement machine
+  # does not have the old machine's hostname - it has whatever the installer
+  # gave it. Scoping every lookup to the LOCAL hostname therefore guaranteed
+  # "No snapshot matches the given selector" on precisely the host that restore
+  # exists for. Measured: snapshot host ace6892e7dcc, recovered host
+  # 343069ab6b60, same repository, same run ID, zero matches.
+  #
+  # So: when the local host owns no matching snapshot and the caller named no
+  # --source-host, let the repository answer - but only when its answer is
+  # unambiguous. One other host is an obvious recovery; several is a shared
+  # repository where guessing could restore another machine's data.
+  if [ -z "${host}" ] && [ "$(printf '%s' "${json}" | jq 'length')" -eq 0 ]; then
+    local all n
+    all="$(_restore_snapshots_json "" "${job}" "${run}" "${kind}")" || return 1
+    n="$(printf '%s' "${all}" | jq '[.[].hostname] | unique | length')"
+    if [ "${n}" = "1" ]; then
+      warn "No snapshot for this host (${BGB_HOSTNAME}). Using the only host in this repository: $(printf '%s' "${all}" | jq -r '.[0].hostname')"
+      json="${all}"
+    elif [ "${n}" != "0" ]; then
+      err "No snapshot for this host (${BGB_HOSTNAME}), and this repository holds several:"
+      printf '%s' "${all}" | jq -r '[.[].hostname] | unique | .[]' \
+        | while read -r h; do [ -n "${h}" ] && err "    ${h}"; done
+      err "Name the one you mean with:  --source-host <hostname>"
+      return 1
+    fi
+  fi
+
   local filter='sort_by(.time) | last | .short_id // empty'
   if [ -n "${at}" ]; then
     filter="[.[] | select(.time <= \"${at}\")] | sort_by(.time) | last | .short_id // empty"
@@ -116,7 +155,7 @@ cmd_restore() {
 restore_parse_common() {
   R_RUN=""; R_AT=""; R_SNAPSHOT=""; R_JOB=""; R_TARGET=""; R_INPLACE=0
   R_OVERWRITE="if-newer"; R_VERIFY=0; R_SCRIPT=""; R_FORCE_UNSAFE=0
-  R_PATH=""; R_NAME=""; R_DB=""; R_INTO="scratch"; R_SWAP=0
+  R_PATH=""; R_NAME=""; R_DB=""; R_INTO="scratch"; R_SWAP=0; R_SOURCE_HOST=""
   R_PROFILE="safe"; R_CONFIG_ONLY=0; R_RECREATE=0; R_DELETE_EXTRANEOUS=0
   _RESTORE_REST=()
 
@@ -130,6 +169,11 @@ restore_parse_common() {
       --snapshot=*) R_SNAPSHOT="${1#*=}"; shift ;;
       --job)        R_JOB="$2"; shift 2 ;;
       --job=*)      R_JOB="${1#*=}"; shift ;;
+      # The hostname RECORDED IN THE SNAPSHOTS, which on a rebuilt machine is
+      # not this machine's hostname. Needed only when one repository holds
+      # several hosts; otherwise it is inferred and reported.
+      --source-host)   R_SOURCE_HOST="$2"; shift 2 ;;
+      --source-host=*) R_SOURCE_HOST="${1#*=}"; shift ;;
       --path)       R_PATH="$2"; shift 2 ;;
       --path=*)     R_PATH="${1#*=}"; shift ;;
       --name)       R_NAME="$2"; shift 2 ;;
@@ -154,6 +198,15 @@ restore_parse_common() {
     esac
   done
   [ -z "${R_JOB}" ] && [ "${#BGB_JOB_FILTER[@]}" -gt 0 ] && R_JOB="${BGB_JOB_FILTER[0]}"
+
+  # THIS `return 0` IS LOAD-BEARING. The line above is an && chain, and the
+  # status of the last command IS the function's return value. With no --job and
+  # an empty global filter the chain is false, the function returns 1, and
+  # because every caller invokes it as a plain statement under `set -e` the
+  # whole process exits 1 - before a single line of output. That killed every
+  # restore subcommand (file, dir, volume, project, db, system) unconditionally,
+  # and it did so silently, which is why only an end-to-end run found it.
+  return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -170,7 +223,7 @@ restore_path_cmd() {
   restic_require
 
   local snap
-  snap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" files)"
+  snap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" files "${R_SOURCE_HOST}")"
   [ -n "${snap}" ] || die "${EX_PRECOND}" "No snapshot matches the given selector"
   log "Using snapshot ${snap}"
 
@@ -425,7 +478,7 @@ restore_volume_cmd() {
   fi
 
   local snap token staging
-  snap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" files)"
+  snap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" files "${R_SOURCE_HOST}")"
   [ -n "${snap}" ] || die "${EX_PRECOND}" "No snapshot matches"
   token="$(restore_new_token)"
   staging="${BGB_RESTORE_ROOT}/${token}"
@@ -470,7 +523,7 @@ restore_db_cmd() {
   restic_require
 
   local snap
-  snap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" dbdump)"
+  snap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" dbdump "${R_SOURCE_HOST}")"
   [ -n "${snap}" ] || die "${EX_PRECOND}" "No database dump snapshot matches"
 
   local path="db/${R_DB}"

@@ -352,6 +352,13 @@ worst_rc() {
 # lib_source <name> - source a sibling module from lib/ exactly once.
 lib_source() {
   local name="$1"
+  # A missing module is a broken installation, not a missing feature. Left to
+  # bash it surfaces as a bare "lib/x.sh: No such file or directory" attributed
+  # to core.sh, with no mention of which command died or that it died at all -
+  # which is how a dispatcher entry referencing a module that was never written
+  # went unnoticed until an end-to-end run.
+  [ -r "${BGB_LIB_DIR}/${name}" ] || die "${EX_PRECOND}" \
+    "Installation incomplete: ${BGB_LIB_DIR}/${name} is missing (command: ${BGB_COMMAND:-?})"
   # shellcheck source=/dev/null
   . "${BGB_LIB_DIR}/${name}"
 }

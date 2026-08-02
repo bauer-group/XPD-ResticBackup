@@ -44,8 +44,8 @@ cmd_snapshots() {
 
   local -a args=(snapshots)
   [ "${all_hosts}" -eq 0 ] && args+=(--host "${BGB_HOSTNAME}")
-  [ -n "${job}" ] && args+=(--tag "job=${job}")
-  [ -n "${tag}" ] && args+=(--tag "${tag}")
+  # AND: `--job web --tag kind=dbdump` must mean both, not either.
+  mapfile -t -O "${#args[@]}" args < <(restic_tag_filter_args "${job:+job=${job}}" "${tag}")
   [ -n "${last}" ] && args+=(--latest "${last}")
 
   if [ "${BGB_JSON}" = "1" ]; then
@@ -154,8 +154,11 @@ runs_diff() {
   query_prepare
   require_jq
   local sa sb
-  sa="$(restic_capture snapshots --tag "run=${a}" --tag "kind=files" --json | jq -r '.[0].short_id // empty')"
-  sb="$(restic_capture snapshots --tag "run=${b}" --tag "kind=files" --json | jq -r '.[0].short_id // empty')"
+  # AND. With repeated --tag flags both queries would match every snapshot of
+  # either run plus every kind=files snapshot ever taken, and .[0] would then
+  # diff two arbitrary snapshots while looking entirely successful.
+  sa="$(restic_capture snapshots --tag "run=${a},kind=files" --json | jq -r '.[0].short_id // empty')"
+  sb="$(restic_capture snapshots --tag "run=${b},kind=files" --json | jq -r '.[0].short_id // empty')"
   [ -n "${sa}" ] && [ -n "${sb}" ] || die "${EX_PRECOND}" "Could not resolve both runs to file snapshots"
   restic_exec diff "${sa}" "${sb}"
 }

@@ -319,3 +319,202 @@ JSONL
   [ "$status" -eq 0 ]
   [ "$output" = "1:1:30" ]
 }
+
+# -----------------------------------------------------------------------------
+# BUG 9: every restore subcommand died silently under `set -e`
+# -----------------------------------------------------------------------------
+# restore_parse_common() ended on an && chain:
+#     [ -z "${R_JOB}" ] && [ "${#BGB_JOB_FILTER[@]}" -gt 0 ] && R_JOB=...
+# The status of a function's last command IS its return value, and that chain is
+# false whenever --job is given (first test fails) OR no global filter is set
+# (second test fails) - which is every real invocation. All five callers run it
+# as a plain statement under `set -euo pipefail`, so the process exited 1 before
+# printing anything at all. `restore file|dir|volume|project|db|system` were
+# therefore ALL dead, and the silence is why unit tests and shellcheck missed it.
+# Only an end-to-end run against a real repository surfaced it.
+@test "regression: restore_parse_common returns 0 with no --job and no filter" {
+  bgb_load_lib config restic restore
+  BGB_JOB_FILTER=()
+  run restore_parse_common --path /srv/data --to /tmp/x
+  [ "$status" -eq 0 ]
+}
+
+@test "regression: restore_parse_common returns 0 when --job IS given" {
+  bgb_load_lib config restic restore
+  BGB_JOB_FILTER=()
+  run restore_parse_common --job docker --path /srv/data
+  [ "$status" -eq 0 ]
+}
+
+@test "regression: a restore entry point survives set -e up to its own checks" {
+  # The end-to-end shape of the bug: under `set -e`, reaching ANY diagnostic at
+  # all was the thing that failed. Exit 2 (usage) proves the parser returned.
+  bgb_load_lib config restic restore
+  run bash -c "
+    set -euo pipefail
+    BGB_LIB_DIR='${BGB_LIB_DIR}'
+    . '${BGB_LIB_DIR}/core.sh'; . '${BGB_LIB_DIR}/redact.sh'
+    . '${BGB_LIB_DIR}/json.sh'; . '${BGB_LIB_DIR}/config.sh'
+    . '${BGB_LIB_DIR}/restic.sh'; . '${BGB_LIB_DIR}/restore.sh'
+    BGB_JOB_FILTER=()
+    usage_restore() { :; }
+    restore_path_cmd dir --to /tmp/x
+  "
+  # --path is missing, so it must be a USAGE error - not a bare, silent 1.
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--path"* ]]
+}
+
+@test "regression: config_key_suggest returns 0 when nothing is similar" {
+  # Same class. The caller does hint=\"\$(config_key_suggest ...)\", so a
+  # non-zero return aborted config_lint under `set -e` at precisely the moment
+  # it had an unknown key to report - and the key was never printed.
+  bgb_load_lib config
+  run bash -c "
+    set -euo pipefail
+    . '${BGB_LIB_DIR}/core.sh'; . '${BGB_LIB_DIR}/config.sh'
+    hint=\"\$(config_key_suggest ZZZ_NOTHING_LIKE_THIS)\"
+    echo \"ok:[\${hint}]\"
+  "
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok:[]" ]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 10: repeated --tag is OR, so selectors matched the wrong snapshot
+# -----------------------------------------------------------------------------
+# restic's --tag is an OR over comma-separated tag LISTS. Measured against
+# restic 0.19.1 in the rig, on a snapshot tagged job=e2e but not kind=files:
+#     --tag job=e2e --tag kind=files  -> 1 hit   (OR)
+#     --tag job=e2e,kind=files        -> 0 hits  (AND)
+# Every selector here means AND. The OR form does not fail - it silently returns
+# a DIFFERENT snapshot, and `dr` would then `docker load` the wrong image or a
+# restore would write the wrong bytes over a live directory.
+@test "regression: a tag filter is one comma-joined --tag, not several" {
+  bgb_load_lib restic
+  local -a a=()
+  mapfile -t a < <(restic_tag_filter_args "job=docker" "kind=files")
+  [ "${#a[@]}" -eq 2 ]
+  [ "${a[0]}" = "--tag" ]
+  [ "${a[1]}" = "job=docker,kind=files" ]
+}
+
+@test "regression: empty tag terms are dropped, not emitted as commas" {
+  bgb_load_lib restic
+  local -a a=()
+  mapfile -t a < <(restic_tag_filter_args "job=docker" "" "kind=files")
+  [ "${a[1]}" = "job=docker,kind=files" ]
+
+  mapfile -t a < <(restic_tag_filter_args "" "" "")
+  [ "${#a[@]}" -eq 0 ]
+}
+
+@test "regression: restore selectors emit a single AND filter" {
+  bgb_load_lib config restic restore
+  BGB_HOSTNAME="h.example.invalid"
+  local -a a=()
+  mapfile -t a < <(restic_tag_filter_args "job=docker" "run=R1" "kind=files")
+  [ "${#a[@]}" -eq 2 ]
+  [ "${a[1]}" = "job=docker,run=R1,kind=files" ]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 11: a files-mode snapshot carried no kind= tag
+# -----------------------------------------------------------------------------
+# restore, `runs diff`, the DR planner and the PRINTED RECOVERY SHEET all select
+# on kind=files, and lib/docker.sh already tagged its file snapshot that way -
+# but restic_build_backup_args() did not. A JOB_MODE=files snapshot was written
+# correctly and could never be selected by name again. The recovery sheet
+# instructed operators to use a tag that did not exist.
+@test "regression: a files-mode backup is tagged kind=files" {
+  bgb_load_lib config restic
+  config_defaults
+  job_defaults_reset
+  BGB_HOSTNAME="h.example.invalid"
+  JOB_PATHS=(/srv/data)
+
+  local -a argv=()
+  mapfile -t argv < <(restic_build_backup_args files R1)
+  bgb_argv_has_pair --tag "kind=files" "${argv[@]}"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 12: the dispatcher sourced a module that was never written
+# -----------------------------------------------------------------------------
+# `bg-backup dr` ran `lib_source facts.sh`, and lib/facts.sh does not exist:
+# fact COLLECTION is the standalone hook share/hooks/collect-system-facts.sh and
+# CONSUMPTION is dr.sh reading BGB_FACTS_DIR directly. Every `bg-backup dr`
+# subcommand therefore aborted on its first line - including `dr bootstrap`,
+# which is the first command a recovered host runs, so disaster recovery could
+# not start at all. bash reported only
+#     lib/core.sh: line 356: lib/facts.sh: No such file or directory
+# naming neither the command nor the fact that it had died.
+#
+# This is a static check: it needs no repository, no container and no restic,
+# and it would have caught the bug at `make test-unit`.
+@test "regression: every module the dispatcher sources actually exists" {
+  local root missing=""
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local m
+  while read -r m; do
+    [ -n "${m}" ] || continue
+    [ -r "${root}/lib/${m}" ] || missing="${missing} ${m}"
+  done < <(grep -ohE 'lib_source [a-z_]+\.sh' "${root}/bin/bg-backup.sh" "${root}"/lib/*.sh \
+           | awk '{print $2}' | sort -u)
+  [ -z "${missing}" ] || {
+    echo "modules sourced but absent from lib/:${missing}"
+    false
+  }
+}
+
+@test "regression: lib_source names the missing module instead of dying bare" {
+  bgb_load_lib core
+  run bash -c "
+    set -uo pipefail
+    BGB_LIB_DIR='${BGB_LIB_DIR}'
+    . '${BGB_LIB_DIR}/core.sh'
+    BGB_COMMAND=dr
+    lib_source definitely_not_a_module.sh
+  "
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"definitely_not_a_module.sh"* ]]
+  [[ "$output" == *"Installation incomplete"* ]]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 13: restore materialised sparse files
+# -----------------------------------------------------------------------------
+# restic writes holes as real zero blocks unless told otherwise. The DR
+# rehearsal's 1 GiB sparse file came back apparent 1073741824 / actual
+# 1073745920 - fully allocated. On a recovery host a sparse VM image or database
+# can then exhaust the disk during the restore that is supposed to save you.
+# --sparse is injected centrally because there are eight restore call sites.
+@test "regression: a restore argv gets --sparse" {
+  bgb_load_lib restic
+  local -a argv=(restore abc123 --target /tmp/x --include /srv)
+  _restic_restore_defaults argv
+  local joined="${argv[*]}"
+  [[ "${joined}" == *"--sparse"* ]]
+}
+
+@test "regression: --sparse is not added twice" {
+  bgb_load_lib restic
+  local -a argv=(restore abc123 --sparse --target /tmp/x)
+  _restic_restore_defaults argv
+  local n=0 x
+  for x in "${argv[@]}"; do [ "${x}" = "--sparse" ] && n=$(( n + 1 )); done
+  [ "${n}" -eq 1 ]
+}
+
+@test "regression: --sparse is added ONLY to restore, not to other commands" {
+  # backup, forget and check reject it, so a blanket injection would break
+  # every other command instead.
+  bgb_load_lib restic
+  local -a argv=(backup --host h /srv)
+  _restic_restore_defaults argv
+  [[ "${argv[*]}" != *"--sparse"* ]]
+
+  local -a argv2=(forget --host h --keep-daily 7)
+  _restic_restore_defaults argv2
+  [[ "${argv2[*]}" != *"--sparse"* ]]
+}
