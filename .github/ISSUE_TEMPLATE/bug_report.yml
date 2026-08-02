@@ -1,0 +1,173 @@
+# =============================================================================
+# bg-backup - Bug report form
+# =============================================================================
+# The fields are the ones a maintainer would otherwise have to ask for, and
+# each round-trip costs a day. The version/OS/restic/backend quartet resolves
+# most reports on its own.
+# =============================================================================
+
+name: 🐛 Bug report
+description: Something in bg-backup does not do what it says
+title: '[bug] '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Before you paste anything
+
+        **This is a public issue.** Read every line you paste, and read it
+        *before* you paste it, not after.
+
+        `bg-backup doctor`, `--json` output and the journal are all passed
+        through the tool's redaction layer, and that layer is genuinely good -
+        but it protects the fields it **knows about**. A passphrase you put in
+        an unexpected place, an endpoint hostname, a bucket name that is your
+        customer's name, a `curl` line you typed by hand while debugging: none
+        of that is a field bg-backup knows, so none of it is masked. Redaction
+        is a safety net, never a substitute for reading.
+
+        If a credential has already reached this box, do not delete the comment
+        and move on - **rotate it first**. Once it is submitted it is public,
+        and edit history does not remove it.
+
+        🔒 **Found a vulnerability?** Do not open an issue. Follow
+        [SECURITY.md](https://github.com/bauer-group/XPD-ResticBackup/blob/main/SECURITY.md).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched the existing issues and this is not a duplicate
+          required: true
+        - label: This is a bug report, not a security vulnerability (those go to security@bauer-group.com)
+          required: true
+        - label: I ran `bg-backup doctor` and read its output
+          required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: bg-backup version
+      description: 'Output of `bg-backup version` (the whole block, please - it names restic, install path and config dir)'
+      placeholder: 'bg-backup 1.2.3 / restic 0.19.1'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ubuntu
+    attributes:
+      label: Ubuntu release
+      description: 22.04 is the supported floor - bash 5.1, systemd 249.
+      options:
+        - '22.04 LTS (jammy)'
+        - '24.04 LTS (noble)'
+        - '26.04 LTS'
+        - 'Other / not Ubuntu'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Repository backend
+      description: Where the repository lives. Backend behaviour differs enough that this is usually the second question.
+      options:
+        - 'S3-compatible (MinIO, Ceph, Wasabi, Hetzner, ...)'
+        - 'AWS S3'
+        - 'rest-server (append-only)'
+        - 'rest-server (read-write)'
+        - 'SFTP'
+        - 'Local filesystem or NFS/CIFS mount'
+        - 'Other / more than one'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which command or subsystem
+      options:
+        - 'install.sh / self-update'
+        - 'backup'
+        - 'restore / dump'
+        - 'dr (disaster recovery)'
+        - 'forget / prune / copy (retention)'
+        - 'check / verify'
+        - 'quiesce (docker, databases)'
+        - 'schedule / systemd units'
+        - 'config / secrets / doctor'
+        - 'status / logs / snapshots / metrics'
+        - 'notifications'
+        - 'documentation'
+        - 'Not sure'
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command and exit code
+      description: 'The command as run (including flags), and `echo $?` after it. Exit codes are the scheduling interface here: 3 is partial, 5 is locked, 6 is repository, 9 is a safety refusal.'
+      render: console
+      placeholder: |
+        $ sudo bg-backup backup --job system
+        ...
+        $ echo $?
+        3
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: Two or three sentences is plenty. If data is missing from a snapshot or a restore, say exactly which paths.
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: '`bg-backup doctor` output'
+      description: 'Redaction masks the fields the tool knows about. **Read it anyway** - endpoint, bucket, hostname and paths are not secrets to the tool but may be to you.'
+      render: console
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        `journalctl -u bg-backup@<job>.service -n 200 --no-pager`, or
+        `/var/log/bg-backup/<job>.log`. Same warning: read before pasting.
+      render: console
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: 'The job stanza from `/etc/bg-backup/conf.d/*.conf`, or `bg-backup config show --job <name> --resolved`. Never the contents of `credentials/`.'
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Container runtime, database engine and version, filesystem, network path to the backend, whether it ever worked, what changed.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: redaction-confirmed
+    attributes:
+      label: Final check
+      options:
+        - label: I read everything I pasted above and removed anything that should not be public
+          required: true

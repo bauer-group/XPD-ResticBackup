@@ -1,0 +1,189 @@
+# =============================================================================
+# bg-backup - Security scanning
+# =============================================================================
+# BAUER GROUP | https://github.com/bauer-group/XPD-ResticBackup
+#
+# THIS REPOSITORY EXISTS BECAUSE CREDENTIALS LEAKED INTO WORKING DOCUMENTS.
+# Live MinIO keys and a restic repository passphrase were pasted into notes
+# that later became these docs. The scanners below are the structural control
+# that stops that happening a second time, which is why docs/ is NOT
+# allowlisted anywhere in .gitleaks.toml: documentation is precisely where the
+# leak happened. Placeholder SHAPES are allowlisted instead.
+#
+# PERMISSIONS ARE NOT DECORATION. Each reusable workflow DECLARES the
+# permissions it needs; a caller that grants less is refused by GitHub before
+# any job starts - you get a run with no jobs and no log, which is easily
+# misread as "the workflow never triggered". The blocks below grant exactly
+# what each callee declares:
+#   modules-security-scan        contents: read, security-events: write, actions: read
+#   modules-trufflehog-scan      contents: read, security-events: write, actions: read
+#   modules-vulnerability-scan   ... + packages: read
+#   modules-codeql               ... + packages: read
+#   modules-license-compliance   contents: read, actions: read
+# =============================================================================
+
+name: 🛡️ Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly deep pass, Sunday 04:23 UTC. A finding that only history contains
+    # never shows up on a diff-scoped PR scan; this is the run that finds it.
+    - cron: '23 4 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ===========================================================================
+  # Secrets
+  # ===========================================================================
+
+  secret-scan:
+    name: 🔐 Secret Scan (gitleaks)
+    # Reusable-workflow jobs cannot carry `timeout-minutes`; the parser rejects
+    # the key. The timeout is enforced inside the called workflow.
+    uses: bauer-group/automation-templates/.github/workflows/modules-security-scan.yml@main
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    with:
+      scan-engine: 'gitleaks'
+      # Full, not diff-scoped. This repository is small; scanning everything on
+      # every run costs seconds and removes an entire class of "the secret was
+      # added in a commit the diff scan did not cover" excuses.
+      scan-type: 'full'
+      fail-on-findings: true
+      # Recorded restic/docker JSON responses. They contain repository IDs and
+      # snapshot hashes that look key-shaped to a scanner and are not secrets.
+      exclude-paths: 'tests/fixtures/**'
+    secrets: inherit
+
+  trufflehog:
+    name: 🔎 Secret Scan (TruffleHog)
+    uses: bauer-group/automation-templates/.github/workflows/modules-trufflehog-scan.yml@main
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    with:
+      # On a pull request only the working tree matters and history scanning a
+      # fork's branch is slow and noisy. Everywhere else, scan git history: a
+      # credential that was committed and then "removed" in a later commit is
+      # still in the pack files, still fetchable, and still burned.
+      scan-mode: ${{ github.event_name == 'pull_request' && 'filesystem' || 'git-history' }}
+      # HONEST LIMITATION, worth reading before you trust this job: TruffleHog
+      # verifies a finding by calling the provider's API. A restic repository
+      # passphrase has no provider and no API - it can NEVER be verified, so it
+      # will never appear here as a verified finding. TruffleHog is the control
+      # for cloud provider keys (AWS/S3, GitHub tokens); gitleaks with the
+      # repository's own ruleset is the control for the passphrase. Neither one
+      # replaces the other, which is why both run.
+      only-verified: true
+      include-unverified: false
+    secrets: inherit
+
+  # ===========================================================================
+  # Code and dependencies
+  # ===========================================================================
+
+  codeql:
+    name: 🧠 CodeQL
+    # Fork pull requests get a read-only GITHUB_TOKEN no matter what this file
+    # asks for, so the SARIF upload at the end of CodeQL cannot succeed and the
+    # job fails for a reason that has nothing to do with the code. Run it where
+    # the token can actually write.
+    if: github.event_name != 'pull_request'
+    uses: bauer-group/automation-templates/.github/workflows/modules-codeql.yml@main
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    with:
+      # `languages` is REQUIRED by the module and there is no CodeQL analyzer
+      # for Bash - the product's own source is out of CodeQL's reach entirely.
+      # What CodeQL can analyse here is the workflows themselves: injection via
+      # ${{ github.event.* }} into a `run:` block, over-broad permissions,
+      # unpinned actions. That is a real risk surface for a repository whose
+      # release artefacts get piped into root shells, so the job earns its keep.
+      # ShellCheck (ci.yml) and the two secret scanners above are the controls
+      # for the shell code; do not read a green CodeQL as "the shell is safe".
+      languages: 'actions'
+    secrets: inherit
+
+  vulnerability-scan:
+    name: 🧪 Vulnerability Scan
+    uses: bauer-group/automation-templates/.github/workflows/modules-vulnerability-scan.yml@main
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    secrets: inherit
+
+  license-compliance:
+    name: ⚖️ License Compliance
+    uses: bauer-group/automation-templates/.github/workflows/modules-license-compliance.yml@main
+    permissions:
+      contents: read
+      actions: read
+    secrets: inherit
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+
+  summary:
+    name: 📊 Security Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [secret-scan, trufflehog, codeql, vulnerability-scan, license-compliance]
+    if: always()
+    steps:
+      - name: 📊 Write job summary
+        env:
+          R_GITLEAKS: ${{ needs.secret-scan.result }}
+          R_TRUFFLE: ${{ needs.trufflehog.result }}
+          R_CODEQL: ${{ needs.codeql.result }}
+          R_VULN: ${{ needs.vulnerability-scan.result }}
+          R_LICENSE: ${{ needs.license-compliance.result }}
+        run: |
+          mark() { case "$1" in success) echo "✅" ;; skipped) echo "⏭️" ;; *) echo "❌" ;; esac; }
+          {
+            echo "## 🛡️ Security"
+            echo
+            echo "| Scan | Result |"
+            echo "| --- | --- |"
+            echo "| 🔐 gitleaks | $(mark "${R_GITLEAKS}") ${R_GITLEAKS} |"
+            echo "| 🔎 TruffleHog | $(mark "${R_TRUFFLE}") ${R_TRUFFLE} |"
+            echo "| 🧠 CodeQL (actions) | $(mark "${R_CODEQL}") ${R_CODEQL} |"
+            echo "| 🧪 Vulnerabilities | $(mark "${R_VULN}") ${R_VULN} |"
+            echo "| ⚖️ Licenses | $(mark "${R_LICENSE}") ${R_LICENSE} |"
+            echo
+            echo "> A secret found here is already public. Rotate first, then"
+            echo "> rewrite history - see SECURITY.md."
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: 🚦 Enforce aggregate result
+        env:
+          RESULTS: ${{ needs.secret-scan.result }} ${{ needs.trufflehog.result }} ${{ needs.vulnerability-scan.result }} ${{ needs.license-compliance.result }}
+        run: |
+          # CodeQL is intentionally absent from this list: it is skipped on fork
+          # pull requests by design, and `skipped` must not read as failure.
+          for r in ${RESULTS}; do
+            if [ "${r}" != "success" ]; then
+              echo "::error::A security scan did not pass (${RESULTS})"
+              exit 1
+            fi
+          done
+          echo "All security scans passed."

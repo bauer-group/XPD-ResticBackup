@@ -1,12 +1,41 @@
 # =============================================================================
-# XPD-MailTesting - Release Workflow
+# bg-backup - Release
 # =============================================================================
-# Triggers:
-#   - Push to main branch (excluding docs/markdown changes)
-#   - Manual dispatch with force-release option
+# BAUER GROUP | https://github.com/bauer-group/XPD-ResticBackup
 #
-# This workflow creates semantic releases without validation.
-# For validation, use separate CI workflows.
+# WHY THIS RELEASE IS GATED (the previous version of this file was not)
+#
+#   install.sh is documented, and used, like this:
+#
+#       curl -fsSL https://raw.githubusercontent.com/.../install.sh | bash
+#
+#   as root, on production hosts, from cloud-init, unattended. A tag published
+#   from this workflow is therefore not "an artefact someone may download
+#   later" - within hours it is a script executing with uid 0 on machines
+#   nobody is watching. There is no review step between `git push` and that
+#   execution, so the gate has to live here.
+#
+#   Concretely: a ShellCheck ERROR in install.sh - an unquoted variable in an
+#   `rm -rf "${PREFIX}/${x}"`, a typo'd variable name that expands to empty -
+#   is a root-owned destructive bug that ships to every new host. The release
+#   is therefore blocked on a ShellCheck run at severity `error` (not the
+#   `warning` level CI uses: warnings are a style conversation, errors are
+#   "this script does not do what it says") and on the workflow linter, because
+#   a broken artefact job produces a tag with no artefacts, which the installer
+#   then cannot fetch.
+#
+#   `needs:` alone would already enforce ordering. The explicit
+#   `needs.validate-scripts.outputs.passed == 'true'` check is deliberate
+#   belt-and-braces: a validation module configured not to fail on findings
+#   still exits 0 and would let `needs` pass. Reading the output means the gate
+#   holds even if someone later relaxes the module's own failure policy.
+#
+# PERMISSIONS: each reusable workflow declares what it needs and GitHub refuses
+# to start a caller that grants less - producing a run with no job and no log.
+#   modules-validate-shellscript   contents: read
+#   modules-validate-workflows     contents: read
+#   modules-semantic-release       contents / issues / pull-requests: write
+#   modules-artifact-generation    contents: write, packages: write, actions: read
 # =============================================================================
 
 name: 🚀 Release
@@ -24,22 +53,142 @@ on:
         description: 'force create release'
         type: boolean
         default: false
+      dry-run:
+        description: 'resolve the next version without publishing anything'
+        type: boolean
+        default: false
+
+# Two releases running concurrently would race on the tag and on CHANGELOG.md.
+# Never cancel in progress: a half-finished release leaves a tag with no
+# artefacts behind it, and the installer resolves tags before assets.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  # ============================================
-  # Release Job
-  # ============================================
+  # ===========================================================================
+  # Gate
+  # ===========================================================================
+
+  validate-scripts:
+    name: 🔍 ShellCheck (release gate)
+    # Reusable-workflow jobs cannot declare `timeout-minutes` - the workflow
+    # parser rejects the key. The timeout is enforced inside the callee.
+    uses: bauer-group/automation-templates/.github/workflows/modules-validate-shellscript.yml@main
+    permissions:
+      contents: read
+    with:
+      scan-directory: '.'
+      # `error`, not `warning`: this is the last gate before a script is piped
+      # into a root shell. Style opinions belong in CI; correctness belongs here.
+      severity: 'error'
+      shell-dialect: 'bash'
+      external-sources: true
+      exclude-codes: '["SC1091"]'
+      exclude-patterns: 'tests/fixtures/**'
+      # The module only globs *.sh - shell files with any other name have to be
+      # listed by hand or they ship unchecked.
+      additional-files: 'share/completion/bg-backup.bash'
+    secrets: inherit
+
+  validate-workflows:
+    name: ⚙️ Workflow Lint (release gate)
+    uses: bauer-group/automation-templates/.github/workflows/modules-validate-workflows.yml@main
+    permissions:
+      contents: read
+    secrets: inherit
+
+  # ===========================================================================
+  # Release
+  # ===========================================================================
 
   release:
-    name: 📦 Create Semantic Release
+    name: 🚀 Create Semantic Release
+    needs: [validate-scripts, validate-workflows]
+    if: needs.validate-scripts.outputs.passed == 'true'
     uses: bauer-group/automation-templates/.github/workflows/modules-semantic-release.yml@main
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     with:
       target-branch: 'main'
-      dry-run: false
+      dry-run: ${{ inputs.dry-run || false }}
       force-release: ${{ inputs.force-release || false }}
     secrets: inherit
+
+  # ===========================================================================
+  # Artifacts
+  # ===========================================================================
+
+  artifacts:
+    name: 📦 Publish Release Artifacts
+    needs: [release]
+    # `release-created` is false on every push that carries only chore/docs
+    # commits. Running artifact generation then would attach assets to the
+    # PREVIOUS tag, silently replacing a released archive with a build from
+    # newer source - the one failure mode that makes a version number lie.
+    if: needs.release.outputs.release-created == 'true'
+    uses: bauer-group/automation-templates/.github/workflows/modules-artifact-generation.yml@main
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+    with:
+      # A source archive plus checksums is the whole product: bg-backup is Bash,
+      # there is nothing to compile. install.sh (INSTALL_METHOD=tarball) fetches
+      # exactly this archive, so the checksum file is not optional decoration -
+      # it is what makes an air-gapped install verifiable.
+      artifact-types: 'archive,checksums'
+      tag-name: ${{ needs.release.outputs.tag-name }}
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+
+  summary:
+    name: 📊 Release Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [validate-scripts, validate-workflows, release, artifacts]
+    if: always()
+    steps:
+      - name: 📊 Write job summary
+        env:
+          R_SCRIPTS: ${{ needs.validate-scripts.result }}
+          PASSED: ${{ needs.validate-scripts.outputs.passed }}
+          ISSUES: ${{ needs.validate-scripts.outputs.issues-found }}
+          R_WORKFLOWS: ${{ needs.validate-workflows.result }}
+          R_RELEASE: ${{ needs.release.result }}
+          R_ARTIFACTS: ${{ needs.artifacts.result }}
+          CREATED: ${{ needs.release.outputs.release-created }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag-name }}
+        run: |
+          mark() { case "$1" in success) echo "✅" ;; skipped) echo "⏭️" ;; *) echo "❌" ;; esac; }
+          {
+            echo "## 🚀 Release"
+            echo
+            echo "| Stage | Result |"
+            echo "| --- | --- |"
+            echo "| 🔍 ShellCheck (error) | $(mark "${R_SCRIPTS}") ${R_SCRIPTS} (passed=${PASSED:-n/a}, issues=${ISSUES:-0}) |"
+            echo "| ⚙️ Workflow lint | $(mark "${R_WORKFLOWS}") ${R_WORKFLOWS} |"
+            echo "| 🚀 Semantic release | $(mark "${R_RELEASE}") ${R_RELEASE} |"
+            echo "| 📦 Artifacts | $(mark "${R_ARTIFACTS}") ${R_ARTIFACTS} |"
+            echo
+            if [ "${CREATED}" = "true" ]; then
+              echo "Published **${VERSION}** as \`${TAG}\`."
+              echo
+              echo "Verify before announcing:"
+              echo '```bash'
+              echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${TAG}/install.sh | REF=${TAG} bash"
+              echo '```'
+            else
+              echo "No release was created (no release-worthy commits)."
+            fi
+          } >>"${GITHUB_STEP_SUMMARY}"

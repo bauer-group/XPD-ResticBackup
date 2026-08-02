@@ -1,0 +1,185 @@
+# =============================================================================
+# bg-backup - Integration (Docker rig, real restic, real S3 API)
+# =============================================================================
+# BAUER GROUP | https://github.com/bauer-group/XPD-ResticBackup
+#
+# What CI cannot answer: does the installer actually install, does restic
+# actually talk to an S3-compatible backend, and can a destroyed host be
+# rebuilt from nothing but a repository and a passphrase. This workflow runs
+# the throwaway MinIO rig from tests/rig/ and rehearses exactly that.
+#
+# MATRIX ORDER IS LOAD-BEARING: 22.04 is listed FIRST because it is the floor -
+# bash 5.1 and systemd 249. GitHub starts matrix legs in declaration order, so
+# the oldest target reports first. A run that is green on 26.04 and red on
+# 22.04 is almost never a distro bug; it means someone used bash 5.2 syntax
+# (${var@U}, the new `wait -p` behaviour, ...) or a systemd directive that
+# 249 does not know. Read the 22.04 leg first, always.
+#
+# WHY NOT `services:` / job-level `container:`
+#   * The rig needs a ONE-SHOT init container: MinIO comes up empty, and a
+#     second container has to run `mc mb` plus the scoped access policy and
+#     then exit 0. GitHub's `services:` can only express long-running
+#     containers - it has no notion of a container that is supposed to finish,
+#     and it offers no ordering or depends_on between services.
+#   * Job-level `container:` would run the steps INSIDE a container, which then
+#     needs the Docker socket to build the victim image - docker-in-docker for
+#     no benefit.
+#   Driving `docker compose` from the runner keeps one compose file that works
+#   identically on a developer laptop (`make integration`) and here.
+#
+# NO SECRETS. The rig credentials are throwaway literals inside the compose
+# file, allowlisted by name in .gitleaks.toml and asserted against by the
+# redaction regression test. Nothing here may ever be pointed at a real bucket.
+# =============================================================================
+
+name: 🧪 Integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bin/**'
+      - 'lib/**'
+      - 'share/**'
+      - 'tests/**'
+      - 'install.sh'
+      - '.github/workflows/integration.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bin/**'
+      - 'lib/**'
+      - 'share/**'
+      - 'tests/**'
+      - 'install.sh'
+      - '.github/workflows/integration.yml'
+  schedule:
+    # 02:17 UTC daily. Off the hour on purpose: the top of the hour is when
+    # every scheduled workflow on GitHub fires and queue time balloons.
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  rig:
+    name: 🧪 Ubuntu ${{ matrix.ubuntu }}
+    runs-on: ubuntu-latest
+    # Generous: a cold run pulls the Ubuntu base image, installs restic, seeds
+    # data, backs it up and restores it. Still bounded - a hung `restic unlock`
+    # or a compose wait that never settles must not burn a 6-hour job slot.
+    timeout-minutes: 45
+    strategy:
+      # Never fail-fast. If 24.04 breaks we still want to know whether 22.04 and
+      # 26.04 break the same way; "one leg cancelled the others" turns a
+      # three-line answer into a bisect.
+      fail-fast: false
+      matrix:
+        ubuntu: ['22.04', '24.04', '26.04']
+
+    env:
+      # Consumed by tests/rig/docker-compose.yml, which passes it through to the
+      # victim/phoenix images as the UBUNTU_TAG build arg. Identical mechanism
+      # to `make integration UBUNTU=22.04`, so a failure here is reproducible
+      # locally with one variable.
+      BGB_UBUNTU_TAG: ${{ matrix.ubuntu }}
+      COMPOSE_FILE: tests/rig/docker-compose.yml
+      # Compose v2 reads these; keeping the project name distinct per leg stops
+      # two matrix legs from colliding if they ever land on the same runner.
+      COMPOSE_PROJECT_NAME: bgbrig${{ strategy.job-index }}
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: 🔧 Show toolchain
+        run: |
+          docker --version
+          docker compose version
+          echo "victim/phoenix base image: ubuntu:${BGB_UBUNTU_TAG}"
+
+      - name: 🪣 Start MinIO rig
+        # `--wait` blocks until minio is healthy AND the one-shot minio-init has
+        # completed. Starting the victim before the bucket and policy exist
+        # produces a `restic init` failure that reads like a credentials
+        # problem, which is a genuinely expensive wrong turn.
+        run: docker compose up -d --wait minio minio-init
+
+      - name: 🏗️ Build victim image
+        run: docker compose build victim
+
+      - name: 🧪 Installer end-to-end
+        # tests/e2e/installer.sh runs the real install.sh inside a clean Ubuntu
+        # container: fetch, verify restic, lay out /opt, /etc, systemd units,
+        # then `bg-backup doctor`. This is the only place the curl|bash path is
+        # exercised as an operator would actually experience it.
+        run: docker compose run --rm victim /opt/bgb/tests/e2e/installer.sh
+
+      - name: 🏗️ Build phoenix image
+        run: docker compose build phoenix
+
+      - name: 🔥 DR rehearsal - seed and back up
+        run: docker compose run --rm victim /opt/bgb/tests/e2e/dr-seed-and-backup.sh
+
+      - name: 💥 Destroy the victim host
+        # The whole point of the rehearsal: the machine that made the backup no
+        # longer exists. -f -s -v also removes its volumes, so nothing but the
+        # repository in MinIO survives into the next step.
+        run: docker compose rm -fsv victim
+
+      - name: 🚑 DR rehearsal - restore and assert
+        # phoenix is a bare host that has never seen the data. It gets the
+        # repository URL and the passphrase and nothing else, and must
+        # reconstruct the seeded tree byte for byte.
+        run: docker compose run --rm phoenix /opt/bgb/tests/e2e/dr-restore-and-assert.sh
+
+      - name: 📜 Collect rig logs
+        if: failure()
+        run: |
+          mkdir -p rig-logs
+          docker compose ps -a >rig-logs/compose-ps.txt 2>&1 || true
+          docker compose logs --no-color --timestamps >rig-logs/compose.log 2>&1 || true
+
+      - name: 📤 Upload rig logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rig-logs-ubuntu-${{ matrix.ubuntu }}
+          path: rig-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: 🧹 Tear down rig
+        # `always()` and `-v`: a leaked MinIO volume on a self-hosted runner
+        # would carry a previous run's repository into the next one, and a
+        # rehearsal that restores yesterday's snapshot proves nothing.
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  summary:
+    name: 📊 Integration Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [rig]
+    if: always()
+    steps:
+      - name: 📊 Write job summary
+        env:
+          RESULT: ${{ needs.rig.result }}
+        run: |
+          {
+            echo "## 🧪 Integration"
+            echo
+            echo "Matrix result (ubuntu 22.04 / 24.04 / 26.04): **${RESULT}**"
+            echo
+            echo "> If 22.04 is the only red leg, suspect bash 5.2 syntax or a"
+            echo "> systemd directive newer than 249 before suspecting the rig."
+          } >>"${GITHUB_STEP_SUMMARY}"
+          [ "${RESULT}" = "success" ] || exit 1

@@ -1,0 +1,199 @@
+# =============================================================================
+# bg-backup - CI (hermetic gate)
+# =============================================================================
+# BAUER GROUP | https://github.com/bauer-group/XPD-ResticBackup
+#
+# HERMETIC BY CONTRACT: ShellCheck, workflow lint, shfmt and the bats unit
+# suite. No Docker daemon, no MinIO rig, no repository backend, no secrets.
+# This is the gate that must stay fast enough to run on every push - anything
+# that needs a live repository lives in integration.yml and runs on a schedule.
+#
+# The job set mirrors `make check-all` exactly (lint, format-check, test-unit,
+# test-config). That is deliberate: a contributor who runs `make check-all`
+# locally must be able to predict this workflow's verdict. If you add a gate
+# here, add the same target to the Makefile in the same commit, or the local
+# and remote answers start disagreeing and people learn to ignore CI.
+#
+# PERMISSIONS: the two `uses:` jobs call reusable workflows that DECLARE
+# `contents: read`. A caller must grant at least what the callee declares -
+# otherwise GitHub refuses to start the run and you get a workflow with no job
+# and no log, which looks exactly like "CI never triggered". The per-job
+# permissions blocks below are therefore not decoration.
+# =============================================================================
+
+name: 🔎 CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push to the same branch makes the first answer worthless. Cancel it.
+# Never cancel on main: those runs feed the release gate and the badge.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ===========================================================================
+  # Static analysis
+  # ===========================================================================
+
+  validate-scripts:
+    name: 🔍 ShellCheck
+    # NOTE: a job that calls a reusable workflow cannot carry `timeout-minutes`
+    # - the workflow parser rejects the key outright ("Unexpected value"). The
+    # timeout lives inside the called workflow. Every job we own below has one.
+    uses: bauer-group/automation-templates/.github/workflows/modules-validate-shellscript.yml@main
+    permissions:
+      contents: read
+    with:
+      scan-directory: '.'
+      severity: 'warning'
+      shell-dialect: 'bash'
+      # Mirrors `external-sources=true` in .shellcheckrc so `source lib/core.sh`
+      # is followed and the libraries are checked in context rather than as
+      # isolated fragments full of "undefined variable" noise.
+      external-sources: true
+      # SC1091 - "Not following: <file> was not specified as input". Runtime
+      # config (/etc/bg-backup/*.conf, credentials/*.env) does not exist at lint
+      # time and never will in a checkout. Every such source is guarded by
+      # config_require_perms() + config_lint() before it is executed, so this
+      # exclusion hides no real risk. Kept identical to .shellcheckrc.
+      exclude-codes: '["SC1091"]'
+      # Recorded restic/docker JSON responses - data, not code.
+      exclude-patterns: 'tests/fixtures/**'
+      # CAVEAT, and the reason bin/bg-backup.sh keeps a .sh suffix it does not
+      # need: the shared module only globs *.sh. Shell files with any other
+      # name are invisible to it and must be named here one by one.
+      additional-files: 'share/completion/bg-backup.bash'
+    secrets: inherit
+
+  validate-workflows:
+    name: ⚙️ Workflow Lint
+    uses: bauer-group/automation-templates/.github/workflows/modules-validate-workflows.yml@main
+    permissions:
+      contents: read
+    secrets: inherit
+
+  # ===========================================================================
+  # Formatting
+  # ===========================================================================
+
+  format:
+    name: 🎨 Format Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+
+      - name: 🔧 Setup Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      # shfmt is installed by `go run` at an EXACT version rather than from apt.
+      # apt ships whatever shfmt the distro froze, and shfmt's output changes
+      # between minor versions: with a floating version, CI and the developer's
+      # pre-commit hook disagree about correct formatting and the contributor
+      # ends up in a reformat loop neither side can win. This pin must stay in
+      # lockstep with the shfmt rev in .pre-commit-config.yaml.
+      - name: 🎨 shfmt -d (diff only, never rewrite)
+        env:
+          SHFMT_VERSION: v3.12.0
+        run: |
+          go run "mvdan.cc/sh/v3/cmd/shfmt@${SHFMT_VERSION}" \
+            -i 2 -ci -bn -d bin lib share scripts tests install.sh
+
+  # ===========================================================================
+  # Tests
+  # ===========================================================================
+
+  unit:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 📥 Checkout
+        # submodules: recursive brings in tests/helper/bats-core. Without it the
+        # Makefile would try `git submodule update` against a checkout that has
+        # no credentials for it, and the failure reads as a bats bug.
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      # The runner ships bash 5.2. Our floor is bash 5.1 (Ubuntu 22.04), so this
+      # step records the version but CANNOT catch 5.2-only syntax - a construct
+      # like ${var@U} passes here and dies on a production 22.04 host. The real
+      # 5.1 gate is the ubuntu-22.04 leg of integration.yml. Do not mistake a
+      # green CI for proof of 22.04 compatibility.
+      - name: 🔧 Record toolchain versions
+        run: |
+          bash --version | head -1
+          jq --version
+
+      - name: 🧪 Bats unit suite
+        run: make test-unit
+
+      - name: 🧾 Validate shipped example configuration
+        run: make test-config
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+
+  summary:
+    name: 📊 CI Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [validate-scripts, validate-workflows, format, unit]
+    # always() so the summary is written even when a gate failed - the table is
+    # most useful precisely then. The explicit result check below is what turns
+    # this into a single required status check for branch protection; without it
+    # the job would report success while a dependency was red.
+    if: always()
+    steps:
+      - name: 📊 Write job summary
+        env:
+          R_SCRIPTS: ${{ needs.validate-scripts.result }}
+          R_WORKFLOWS: ${{ needs.validate-workflows.result }}
+          R_FORMAT: ${{ needs.format.result }}
+          R_UNIT: ${{ needs.unit.result }}
+          FILES_CHECKED: ${{ needs.validate-scripts.outputs.files-checked }}
+          ISSUES_FOUND: ${{ needs.validate-scripts.outputs.issues-found }}
+        run: |
+          mark() { case "$1" in success) echo "✅" ;; skipped) echo "⏭️" ;; *) echo "❌" ;; esac; }
+          {
+            echo "## 🔎 CI (hermetic)"
+            echo
+            echo "| Gate | Result |"
+            echo "| --- | --- |"
+            echo "| 🔍 ShellCheck | $(mark "${R_SCRIPTS}") ${R_SCRIPTS} |"
+            echo "| ⚙️ Workflow lint | $(mark "${R_WORKFLOWS}") ${R_WORKFLOWS} |"
+            echo "| 🎨 shfmt | $(mark "${R_FORMAT}") ${R_FORMAT} |"
+            echo "| 🧪 Unit tests | $(mark "${R_UNIT}") ${R_UNIT} |"
+            echo
+            echo "Shell files checked: \`${FILES_CHECKED:-n/a}\` · issues found: \`${ISSUES_FOUND:-n/a}\`"
+            echo
+            echo "> This gate is hermetic. A green result says nothing about a real"
+            echo "> repository backend or about Ubuntu 22.04 - see 🧪 Integration."
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: 🚦 Enforce aggregate result
+        env:
+          RESULTS: ${{ needs.validate-scripts.result }} ${{ needs.validate-workflows.result }} ${{ needs.format.result }} ${{ needs.unit.result }}
+        run: |
+          for r in ${RESULTS}; do
+            if [ "${r}" != "success" ]; then
+              echo "::error::A CI gate did not pass (${RESULTS})"
+              exit 1
+            fi
+          done
+          echo "All CI gates passed."

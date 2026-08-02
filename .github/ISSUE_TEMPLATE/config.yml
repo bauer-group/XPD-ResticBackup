@@ -1,0 +1,40 @@
+# =============================================================================
+# bg-backup - Issue template chooser
+# =============================================================================
+# blank_issues_enabled is false on purpose. A blank issue on this repository is
+# almost always a bug report missing the version, the Ubuntu release, the
+# restic version and the backend - the four facts that answer most reports -
+# and every one of those costs a day of round-trips to collect.
+#
+# The security link is FIRST. A vulnerability filed as a public issue cannot be
+# unfiled; making the private route the most visible option is the cheapest
+# control available here.
+# =============================================================================
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/bauer-group/XPD-ResticBackup/security/advisories/new
+    about: >-
+      Never in a public issue. Private advisory, or security@bauer-group.com -
+      acknowledged within 2 business days. See SECURITY.md.
+
+  - name: 🆘 I am in the middle of a recovery and something is wrong
+    url: https://github.com/bauer-group/XPD-ResticBackup/blob/main/docs/DISASTER-RECOVERY.md
+    about: >-
+      Read the runbook first. A repository plus its passphrase is always enough
+      to restore with plain restic, with no bg-backup involved - the runbook
+      spells out those commands.
+
+  - name: 📖 Documentation and configuration reference
+    url: https://github.com/bauer-group/XPD-ResticBackup#readme
+    about: >-
+      Every setting is documented inline in share/config/*.example, including
+      why the default is what it is.
+
+  - name: 💬 Questions and ideas
+    url: https://github.com/bauer-group/XPD-ResticBackup/discussions
+    about: >-
+      "How should I lay out retention for X" and similar. Discussions, not
+      issues - issues are for defects and concrete proposals.

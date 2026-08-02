@@ -1,0 +1,66 @@
+# =============================================================================
+# XPD-ResticBackup - Git Ignore
+# =============================================================================
+# THIS REPOSITORY IS PUBLIC. Everything below is either a secret, host state,
+# or unreviewed material that must never reach a public remote.
+# =============================================================================
+
+# --- Drafts: unreviewed working material. NEVER committed. -------------------
+# The originals contained live MinIO credentials and a restic repository
+# passphrase. Draft content is promoted into docs/ only after a human has
+# removed every credential and replaced it with a <placeholder>.
+.drafts/
+
+# --- Runtime secrets ---------------------------------------------------------
+*.env
+!*.env.example
+!*.env.template
+.restic-env
+credentials/
+secrets/
+*.pem
+*.key
+!share/restic/*.fpr
+id_rsa*
+id_ed25519*
+*.age
+*.gpg
+*.enc
+secrets.yml
+*.vault
+recovery-sheet*.pdf
+recovery-bundle*
+
+# --- Host state that must never be committed ---------------------------------
+*.prom
+/evidence/
+bg-backup.conf
+conf.d/
+!share/config/**
+
+# --- Local test rig state ----------------------------------------------------
+tests/rig/.data/
+tests/rig/.env
+# bats helpers are git SUBMODULES, not ignored content - see .gitmodules.
+# Ignoring them here would make `git submodule add` refuse the path.
+.bats-tmp/
+*.bats.log
+
+# --- Build / release ---------------------------------------------------------
+dist/
+build/
+*.tar.gz
+*.deb
+*.rpm
+sbom*.json
+
+# --- OS / IDE / tooling ------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+.claude/
+node_modules/

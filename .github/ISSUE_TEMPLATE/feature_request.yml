@@ -1,0 +1,119 @@
+# =============================================================================
+# bg-backup - Feature request form
+# =============================================================================
+# The two questions that decide a feature here are "what does it cost during a
+# recovery" and "what does it do when it fails". A proposal that answers both
+# gets read carefully; one that answers neither gets a request for both.
+# =============================================================================
+
+name: 💡 Feature request
+description: Propose a capability or a change in behaviour
+title: '[feat] '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### The bar
+
+        bg-backup is deliberately small. It runs as root, unattended, on a
+        timer, and it is allowed to delete backup history - so every feature is
+        also a new way for that to go wrong at 03:00 with nobody watching.
+
+        The design philosophy is lean: the simplest thing that works, not the
+        most capable thing that could be built. A proposal that removes a
+        failure mode will always win over one that adds a capability.
+
+        Two answers matter more than the rest, and they are asked for below:
+        what this costs during a **disaster recovery**, and what it does when
+        it **fails**.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched the existing issues and this is not a duplicate
+          required: true
+        - label: I checked whether restic already does this and bg-backup simply does not expose it
+          required: false
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: 'What goes wrong today, concretely. Start from the operational situation, not from the solution - "I cannot tell whether last night ran" rather than "add a dashboard".'
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: 'What bg-backup would do. If it needs configuration, name the setting (`BGB_*` global, `JOB_*` per job) and give its default. If it adds a command or flag, write the line an operator would type.'
+    validations:
+      required: true
+
+  - type: textarea
+    id: failure
+    attributes:
+      label: What happens when it fails
+      description: |
+        Which exit code, and does it change the outcome of the backup itself?
+
+        The house rule is that anything peripheral - a notifier, a metric, a
+        hook that reports rather than prepares - must never change the job's
+        exit code. If your proposal needs to break that rule, say so here and
+        explain why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: recovery-impact
+    attributes:
+      label: Impact on disaster recovery
+      description: |
+        A backup tool is judged on the worst day, not the average one. Does
+        this add anything that must be present, configured, or reachable in
+        order to **restore**?
+
+        The standing constraint: a repository plus a passphrase must remain
+        enough to recover with plain `restic`, with no bg-backup involved at
+        all. Anything that erodes that needs a strong argument.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: 'Including "do nothing and document it" and "solve it in the hook that already exists". Both are legitimate outcomes.'
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - 'install.sh / self-update'
+        - 'backup'
+        - 'restore / dr'
+        - 'retention (forget / prune / copy)'
+        - 'check / verify'
+        - 'quiesce (docker, databases)'
+        - 'schedule / systemd'
+        - 'config / secrets'
+        - 'observability (status, metrics, notifications)'
+        - 'documentation'
+        - 'Other'
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to open a pull request for this
+          required: false

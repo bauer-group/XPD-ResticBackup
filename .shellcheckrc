@@ -1,0 +1,20 @@
+# =============================================================================
+# XPD-ResticBackup - ShellCheck configuration
+# =============================================================================
+# Keeps a local `shellcheck` run identical to the CI gate
+# (automation-templates/.github/workflows/modules-validate-shellscript.yml,
+# whose `external-sources` input also defaults to true).
+# =============================================================================
+
+# Follow `source`/`.` directives so lib/*.sh get checked in context.
+external-sources=true
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/lib
+source-path=SCRIPTDIR/../lib
+
+# SC1091 - "Not following: <file> was not specified as input"
+# Runtime config (/etc/bg-backup/*.conf, credentials/*.env) does not exist at
+# lint time and is deliberately outside the repository. Every such source is
+# additionally guarded by config_require_perms() + config_lint() before it is
+# ever executed, so silencing this does not hide a real risk.
+disable=SC1091

@@ -1,0 +1,48 @@
+# =============================================================================
+# XPD-ResticBackup - gitleaks configuration
+# =============================================================================
+# This repository exists because a set of live MinIO credentials and a restic
+# repository passphrase were pasted into working documents. The scanner is the
+# structural control that stops that happening a second time.
+#
+# DELIBERATE NON-DECISION: docs/ is NOT allowlisted. Other repositories in the
+# organisation exempt their documentation directory; here, documentation is
+# precisely where the leak happened. Placeholder SHAPES are allowlisted instead,
+# so a real key pasted into a runbook is still a finding.
+# =============================================================================
+
+title = "XPD-ResticBackup"
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Throwaway test-rig literals and documentation placeholders"
+
+paths = [
+  # The vendored restic release public key. Public by definition; the default
+  # ruleset flags PGP blocks regardless.
+  '''share/restic/restic-release-key\.asc''',
+  # Recorded restic/docker JSON used by the bats suite.
+  '''tests/fixtures/.*''',
+]
+
+regexes = [
+  # --- Integration-rig credentials -----------------------------------------
+  # Named literals only, never a blanket exemption for the compose file. These
+  # values exist solely inside an ephemeral MinIO container in CI and are also
+  # asserted against by the redaction regression test.
+  '''bgb-it-ci-user''',
+  '''bgb-it-ci-throwaway-secret''',
+  '''bgb-it-ci-throwaway-repo-passphrase''',
+  '''bgb-rig-root(-secret)?''',
+
+  # --- Documentation placeholder SHAPES ------------------------------------
+  # Convention (enforced in CONTRIBUTING.md): every credential in every document
+  # is a placeholder of one of these forms. Never a realistic-looking fake - a
+  # plausible fake key trains reviewers to skim past key-shaped strings.
+  '''<[A-Za-z0-9 _.-]*>''',
+  '''CHANGE_ME[A-Z_]*''',
+  '''(EXAMPLE|PLACEHOLDER|REDACTED|REPLACE_ME|YOUR_[A-Z_]+)''',
+  '''\$\{[A-Za-z_][A-Za-z0-9_]*\}''',
+  '''x{8,}|X{8,}|\.{3,}''',
+]

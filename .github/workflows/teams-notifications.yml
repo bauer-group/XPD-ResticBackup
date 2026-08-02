@@ -1,0 +1,165 @@
+# =============================================================================
+# bg-backup - Microsoft Teams notifications
+# =============================================================================
+# BAUER GROUP | https://github.com/bauer-group/XPD-ResticBackup
+#
+# Two events reach the team channel and nothing else:
+#   * a workflow on main FAILED - CI, Integration, Security or Release;
+#   * a release was PUBLISHED - the moment new code becomes something that
+#     `curl | bash` will install as root on the next provisioned host.
+#
+# Success on main is deliberately silent. A channel that receives a green card
+# every push is a channel nobody reads, and then the red card is missed too.
+#
+# THE SAME RULE THE PRODUCT APPLIES TO ITS OWN NOTIFIERS APPLIES HERE: a
+# notifier may never change the outcome it is reporting. bg-backup runs its
+# notifiers in a subshell with a timeout and ignores their exit code; this
+# workflow uses `continue-on-error` and a bounded curl for exactly the same
+# reason. A Teams outage must never turn into a red mark on the repository.
+#
+# WEBHOOK FORMAT: this posts an Adaptive Card in the `attachments` envelope
+# that a Power Automate "Workflows" incoming webhook expects. The older Office
+# 365 connector format (MessageCard, `@type`/`themeColor`) is NOT accepted by
+# it - those connectors were retired, and a MessageCard body to a Workflows URL
+# returns 202 while silently posting nothing, which is the worst possible
+# failure mode for an alerting path.
+#
+# SECRET: TEAMS_WEBHOOK_URL. When it is absent - forks, and any clone of this
+# repository - the posting step is skipped instead of failing. The check has to
+# sit on the STEP (`if: env.TEAMS_WEBHOOK_URL != ''`), because the `secrets`
+# context is not available in a job-level `if:` and silently evaluates to
+# nothing there.
+# =============================================================================
+
+name: 📣 Teams Notifications
+
+on:
+  workflow_run:
+    # These names must match the `name:` of each workflow EXACTLY, emoji
+    # included. A renamed workflow silently stops notifying - there is no error
+    # for a workflow_run trigger that matches nothing.
+    workflows:
+      - '🔎 CI'
+      - '🧪 Integration'
+      - '🛡️ Security'
+      - '🚀 Release'
+    types: [completed]
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: 📣 Post to Teams
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Silence on success; speak on failure and on a published release.
+    # `cancelled` is excluded on purpose: a cancelled run is almost always a
+    # newer push superseding an older one, and alerting on it is noise.
+    if: >-
+      github.event_name == 'release' ||
+      github.event.workflow_run.conclusion == 'failure' ||
+      github.event.workflow_run.conclusion == 'timed_out'
+    permissions:
+      contents: read
+      # workflow_run payloads are read through the API for the head commit
+      # message; without actions: read that lookup 403s on a private repo.
+      actions: read
+
+    # The secret is mapped at JOB level on purpose. A step's `if:` is evaluated
+    # against the workflow- and job-level env; relying on the step's own `env:`
+    # block being visible to its own `if:` is the kind of subtlety that fails
+    # silently - the step is skipped, the channel stays quiet, and nobody
+    # notices for a month.
+    env:
+      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+
+    steps:
+      - name: 📣 Build and send Adaptive Card
+        # Every payload field below arrives through the environment, never
+        # spliced into the script by ${{ }} - a branch or release name is
+        # user-controlled text, and a branch called `$(id)` must be a string in
+        # a card, not a command on the runner.
+        if: env.TEAMS_WEBHOOK_URL != ''
+        continue-on-error: true
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          # workflow_run branch
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          WF_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WF_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WF_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          WF_URL: ${{ github.event.workflow_run.html_url }}
+          WF_SHA: ${{ github.event.workflow_run.head_sha }}
+          # release branch
+          REL_TAG: ${{ github.event.release.tag_name }}
+          REL_NAME: ${{ github.event.release.name }}
+          REL_URL: ${{ github.event.release.html_url }}
+          REL_AUTHOR: ${{ github.event.release.author.login }}
+        run: |
+          set -euo pipefail
+
+          if [ "${EVENT}" = "release" ]; then
+            title="🚀 Release published: ${REL_NAME:-${REL_TAG}}"
+            style="good"
+            subtitle="${REPO} · ${REL_TAG} · by ${REL_AUTHOR:-unknown}"
+            body_text="New version available. install.sh will serve this tag to every host that installs or self-updates from now on."
+            link_title="Open release"
+            link_url="${REL_URL}"
+          else
+            title="❌ ${WF_NAME} failed on ${WF_BRANCH}"
+            style="attention"
+            subtitle="${REPO} · ${WF_CONCLUSION} · triggered by ${WF_ACTOR:-unknown}"
+            body_text="Commit ${WF_SHA:0:8}. main is red - releases are gated on these checks, so nothing will publish until it is green again."
+            link_title="Open run"
+            link_url="${WF_URL}"
+          fi
+
+          # jq builds the JSON so that a quote or newline in any of the strings
+          # above is escaped by an encoder rather than by hope.
+          jq -n \
+            --arg title "${title}" \
+            --arg subtitle "${subtitle}" \
+            --arg body "${body_text}" \
+            --arg style "${style}" \
+            --arg linkTitle "${link_title}" \
+            --arg linkUrl "${link_url}" \
+            '{
+              type: "message",
+              attachments: [{
+                contentType: "application/vnd.microsoft.card.adaptive",
+                contentUrl: null,
+                content: {
+                  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                  type: "AdaptiveCard",
+                  version: "1.5",
+                  body: [
+                    {
+                      type: "Container",
+                      style: $style,
+                      bleed: true,
+                      items: [
+                        {type: "TextBlock", text: $title, weight: "Bolder", size: "Medium", wrap: true},
+                        {type: "TextBlock", text: $subtitle, isSubtle: true, spacing: "None", wrap: true}
+                      ]
+                    },
+                    {type: "TextBlock", text: $body, wrap: true}
+                  ],
+                  actions: [
+                    {type: "Action.OpenUrl", title: $linkTitle, url: $linkUrl}
+                  ]
+                }
+              }]
+            }' >"${RUNNER_TEMP}/card.json"
+
+          # Bounded, and never retried into a storm: if Teams is unavailable the
+          # information is still in the Actions run, which is the source of
+          # truth. --fail-with-body keeps the response visible in the log.
+          curl -sS --max-time 20 --fail-with-body \
+            -H 'Content-Type: application/json' \
+            --data-binary "@${RUNNER_TEMP}/card.json" \
+            "${TEAMS_WEBHOOK_URL}"

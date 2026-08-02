@@ -1,0 +1,55 @@
+# =============================================================================
+# bg-backup - Documentation
+# =============================================================================
+# BAUER GROUP | https://github.com/bauer-group/XPD-ResticBackup
+#
+# Runs the organisation's shared documentation pipeline (link checking, table
+# of contents, generated sections, badge refresh) and commits the result back.
+#
+# For a backup tool the documentation is part of the product, not a courtesy:
+# the disaster-recovery runbook is read exactly once, by someone whose server
+# is gone, usually at night. A dead link or a stale command in that document
+# costs real recovery time, so it gets a build gate like any other artefact.
+#
+# LOCAL EQUIVALENT: `make docs` renders the long-form documents from
+# docs/*.template.MD via scripts/generate-docs.sh. Edit the templates, never
+# the rendered output - a hand-edit is silently reverted by the next run.
+#
+# PERMISSIONS: documentation.yml@main declares `contents: write` (it commits
+# regenerated files) and `pull-requests: write` (it can open a PR instead when
+# the branch is protected). Granting less makes GitHub refuse to start the run
+# - no job, no log, and it looks like the workflow simply never fired.
+# =============================================================================
+
+name: 📚 Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '**/*.md'
+      - '**/*.MD'
+      - '.github/workflows/documentation.yml'
+  workflow_dispatch:
+
+# Two runs committing regenerated documentation at the same time race on the
+# same branch and one of them loses to a non-fast-forward push. Serialise, and
+# never cancel a run that may be mid-commit.
+concurrency:
+  group: documentation-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    name: 📚 Build Documentation
+    # Reusable-workflow jobs cannot carry `timeout-minutes`; the parser rejects
+    # the key. The timeout is enforced inside the called workflow.
+    uses: bauer-group/automation-templates/.github/workflows/documentation.yml@main
+    permissions:
+      contents: write
+      pull-requests: write
+    secrets: inherit

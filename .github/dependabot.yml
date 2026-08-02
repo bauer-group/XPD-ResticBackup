@@ -1,14 +1,32 @@
 # =============================================================================
-# Dependabot Configuration
+# bg-backup - Dependabot
 # =============================================================================
-# Keeps GitHub Actions versions up to date.
-# The Mailpit image is not tracked here — it uses the floating :latest tag;
-# update with `docker compose pull`.
+# BAUER GROUP | https://github.com/bauer-group/XPD-ResticBackup
+#
+# bg-backup has no package manager: it is Bash, and its only runtime
+# dependencies are restic, jq and coreutils, all installed from the distro or
+# pinned by the installer. There is therefore nothing here that looks like a
+# lockfile. What DOES rot silently is everything around the code:
+#
+#   * GitHub Actions - a pinned action tag that stops receiving fixes.
+#   * The bats submodule under tests/helper - the unit suite's entire runtime.
+#   * The container images the integration rig builds from.
+#
+# NOT TRACKED HERE, on purpose:
+#   * restic itself. Its version is pinned in install.sh (RESTIC_VERSION) and
+#     the binary is GPG-verified against the vendored release key. Bumping it
+#     is a deliberate act with a DR rehearsal attached, not a dependency bump -
+#     a restic upgrade changes repository behaviour for every existing snapshot.
+#   * The Ubuntu base image of the rig. Its tag is a build ARG driven by the CI
+#     matrix (22.04 / 24.04 / 26.04); the OLD tags are the point of the test.
+#     A helpful bump to "latest" would silently delete the bash 5.1 coverage.
 # =============================================================================
 
 version: 2
 updates:
-  # GitHub Actions updates
+  # ---------------------------------------------------------------------------
+  # GitHub Actions
+  # ---------------------------------------------------------------------------
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -16,9 +34,64 @@ updates:
       day: "sunday"
       time: "06:30"
       timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "github-actions"
       - "dependabot"
     commit-message:
+      # Semantic prefix so the release workflow's commit analyser classifies
+      # these correctly: CI plumbing must never produce a feature release.
       prefix: "chore(ci)"
+    groups:
+      # One PR for the whole batch of routine bumps. Five separate PRs that each
+      # move a patch version train reviewers to merge without looking, which is
+      # exactly the habit that lets a compromised action tag through.
+      actions-minor:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---------------------------------------------------------------------------
+  # Vendored bats (git submodule under tests/helper/)
+  # ---------------------------------------------------------------------------
+  # The unit suite is vendored rather than installed from apt so that a
+  # developer, CI and a 22.04 container all run the identical bats. That choice
+  # only holds if something keeps the pin moving.
+  - package-ecosystem: "gitsubmodule"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "06:30"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "tests"
+      - "dependabot"
+    commit-message:
+      prefix: "chore(test)"
+
+  # ---------------------------------------------------------------------------
+  # Integration rig container images
+  # ---------------------------------------------------------------------------
+  # The MinIO server image that stands in for the S3 backend. It is throwaway
+  # infrastructure, but a year-old MinIO stops representing the API surface the
+  # tool actually meets in production - which is the whole reason the rig exists.
+  - package-ecosystem: "docker"
+    directory: "/tests/rig"
+    schedule:
+      interval: "monthly"
+      time: "06:30"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "tests"
+      - "dependabot"
+    commit-message:
+      prefix: "chore(test)"
+    ignore:
+      # See the header: the Ubuntu tags are the test matrix, not a dependency.
+      - dependency-name: "ubuntu"
