@@ -1,3 +1,9 @@
+## [0.1.3](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.1.2...v0.1.3) (2026-08-03)
+
+### 🐛 Bug Fixes
+
+* **db:** closed the remaining audit findings ([d8d93bb](https://github.com/bauer-group/XPD-ResticBackup/commit/d8d93bb41d8945a3f4164bec509ccd4d472a5020))
+
 ## [0.1.2](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.1.1...v0.1.2) (2026-08-03)
 
 ### 🐛 Bug Fixes
