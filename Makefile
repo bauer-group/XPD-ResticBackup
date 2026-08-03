@@ -98,13 +98,31 @@ docs: ## Where the generated documentation comes from
 	@# that was not in the repository, which is the same class of defect as a
 	@# dispatcher sourcing a module nobody wrote. Rendering happens in CI, in the
 	@# shared documentation module, and there is nothing local to run.
-	@printf '\n  README.md is GENERATED from docs/README.template.MD by\n'
+	@printf '\n  README.MD is GENERATED from docs/README.template.MD by\n'
 	@printf '  .github/workflows/documentation.yml on every push to main.\n\n'
-	@printf '  Edit  docs/README.template.MD  - not README.md, which is overwritten.\n'
+	@printf '  Edit  docs/README.template.MD  - not README.MD, which is overwritten.\n'
+	@printf '  The .MD extension is upper case on purpose: the shared module\n'
+	@printf '  validates for exactly that name and fails on README.md.\n\n'
 	@printf '  SECURITY.md and the docs/ tree are hand-written and are not generated.\n\n'
 
-recovery-sheet: ## Render the printable one-page recovery sheet
-	bash scripts/render-recovery-sheet.sh
+recovery-sheet: ## NOT IMPLEMENTED - see the message
+	@# This called scripts/render-recovery-sheet.sh, which does not exist - and
+	@# neither does scripts/, nor share/dr/recovery-sheet.tmpl, nor a `sheet`
+	@# subcommand. The target failed with "No such file or directory", which
+	@# reads like a broken checkout rather than a missing feature.
+	@#
+	@# Saying so out loud matters more here than for an ordinary TODO: the DR
+	@# rehearsal's premise is "the replacement host receives ONLY what the
+	@# recovery sheet lists", and docs/recovery-sheet.md describes the artefact
+	@# as if it could be produced. It cannot be, yet.
+	@printf '\n  \033[31mNot implemented.\033[0m The recovery sheet has no renderer yet:\n\n'
+	@printf '    share/dr/recovery-sheet.tmpl   missing (the layout)\n'
+	@printf '    a `bg-backup secrets sheet`    missing (the data)\n\n'
+	@printf '  docs/recovery-sheet.md describes what it must contain, and\n'
+	@printf '  tests/e2e/dr-restore-and-assert.sh already enforces the property\n'
+	@printf '  that matters: the phoenix host gets nothing the sheet would not\n'
+	@printf '  carry. Producing the printable page is still open.\n\n'
+	@exit 1
 
 submodules: ## Ensure the vendored bats helpers are present
 	@test -x $(BATS) || git submodule update --init --recursive
