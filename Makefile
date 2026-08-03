@@ -93,8 +93,15 @@ dr-rehearse: rig-up ## Full disaster-recovery rehearsal: seed, back up, destroy,
 
 # --- Docs and helpers --------------------------------------------------------
 
-docs: ## Render README.md and SECURITY.md from docs/*.template.MD
-	bash scripts/generate-docs.sh
+docs: ## Where the generated documentation comes from
+	@# scripts/generate-docs.sh never existed - this target pointed at a file
+	@# that was not in the repository, which is the same class of defect as a
+	@# dispatcher sourcing a module nobody wrote. Rendering happens in CI, in the
+	@# shared documentation module, and there is nothing local to run.
+	@printf '\n  README.md is GENERATED from docs/README.template.MD by\n'
+	@printf '  .github/workflows/documentation.yml on every push to main.\n\n'
+	@printf '  Edit  docs/README.template.MD  - not README.md, which is overwritten.\n'
+	@printf '  SECURITY.md and the docs/ tree are hand-written and are not generated.\n\n'
 
 recovery-sheet: ## Render the printable one-page recovery sheet
 	bash scripts/render-recovery-sheet.sh
