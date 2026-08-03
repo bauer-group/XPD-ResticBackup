@@ -35,7 +35,8 @@ version_ge() {
   local i
   for i in 0 1 2; do
     local x="${A[i]:-0}" y="${B[i]:-0}"
-    x="${x//[!0-9]/}"; y="${y//[!0-9]/}"
+    x="${x//[!0-9]/}"
+    y="${y//[!0-9]/}"
     [ -z "${x}" ] && x=0
     [ -z "${y}" ] && y=0
     if [ "${x}" -gt "${y}" ]; then return 0; fi
@@ -66,21 +67,42 @@ restic_require() {
 # -----------------------------------------------------------------------------
 restic_map_rc() {
   case "${1:-1}" in
-    0)   RESTIC_VERDICT="ok";          return "${EX_OK}" ;;
-    3)   RESTIC_VERDICT="partial";     return "${EX_PARTIAL}" ;;
-    10)  RESTIC_VERDICT="no-repo";     return "${EX_REPO}" ;;
-    11)  RESTIC_VERDICT="repo-locked"; return "${EX_REPO}" ;;
-    12)  RESTIC_VERDICT="bad-key";     return "${EX_REPO}" ;;
-    130|143) RESTIC_VERDICT="interrupted"; return "${EX_INTERRUPT}" ;;
-    *)   RESTIC_VERDICT="failed";      return "${EX_FAIL}" ;;
+    0)
+      RESTIC_VERDICT="ok"
+      return "${EX_OK}"
+      ;;
+    3)
+      RESTIC_VERDICT="partial"
+      return "${EX_PARTIAL}"
+      ;;
+    10)
+      RESTIC_VERDICT="no-repo"
+      return "${EX_REPO}"
+      ;;
+    11)
+      RESTIC_VERDICT="repo-locked"
+      return "${EX_REPO}"
+      ;;
+    12)
+      RESTIC_VERDICT="bad-key"
+      return "${EX_REPO}"
+      ;;
+    130 | 143)
+      RESTIC_VERDICT="interrupted"
+      return "${EX_INTERRUPT}"
+      ;;
+    *)
+      RESTIC_VERDICT="failed"
+      return "${EX_FAIL}"
+      ;;
   esac
 }
 
 restic_explain_rc() {
   case "${1}" in
-    0)  printf 'success' ;;
-    1)  printf 'fatal error' ;;
-    3)  printf 'snapshot created, but some source files could not be read' ;;
+    0) printf 'success' ;;
+    1) printf 'fatal error' ;;
+    3) printf 'snapshot created, but some source files could not be read' ;;
     10) printf 'repository does not exist (has it been initialised?)' ;;
     11) printf 'repository is locked by another process (try: bg-backup unlock)' ;;
     12) printf 'wrong password / repository key' ;;
@@ -91,7 +113,7 @@ restic_explain_rc() {
     # the context and the REAL error is the line above this one in the log.
     130) printf 'interrupted (SIGINT, or a --stdin-from-command dump failed - see the error above)' ;;
     143) printf 'terminated (SIGTERM - timeout, RuntimeMaxSec or a stop request)' ;;
-    *)  printf 'unknown restic exit code %s' "${1}" ;;
+    *) printf 'unknown restic exit code %s' "${1}" ;;
   esac
 }
 
@@ -141,7 +163,8 @@ restic_exec() {
 
 # restic_exec_logged <logfile> <args...> - as above, mirrored into a log file.
 restic_exec_logged() {
-  local logfile="$1"; shift
+  local logfile="$1"
+  shift
   local rc=0
   local -a argv=("$@")
   _restic_restore_defaults argv
@@ -152,7 +175,7 @@ restic_exec_logged() {
   debug "restic ${argv[*]}"
   set +e
   "${BGB_RESTIC_BIN}" "${argv[@]}" 2>&1 | tee -a "${logfile}"
-  rc="${PIPESTATUS[0]}"   # NOT $? - that is tee's status
+  rc="${PIPESTATUS[0]}" # NOT $? - that is tee's status
   set -e
   return "${rc}"
 }
@@ -202,12 +225,12 @@ restic_retry() {
     rc=0
     restic_exec "$@" || rc=$?
     case "${rc}" in
-      0|3|10|12) return "${rc}" ;;
+      0 | 3 | 10 | 12) return "${rc}" ;;
     esac
     if [ "${n}" -ge "${BGB_RETRY_ATTEMPTS:-3}" ]; then return "${rc}"; fi
     warn "restic failed (rc=${rc}: $(restic_explain_rc "${rc}")), attempt ${n}/${BGB_RETRY_ATTEMPTS}"
     sleep "${BGB_RETRY_DELAY_SECONDS:-60}"
-    n=$(( n + 1 ))
+    n=$((n + 1))
   done
 }
 
@@ -239,7 +262,8 @@ restic_global_args() {
 # `forget --host --tag job=` safe in a shared bucket and what lets `runs` group
 # the several snapshots a single run produces.
 restic_tag_args() {
-  local job="$1" run_id="$2"; shift 2
+  local job="$1" run_id="$2"
+  shift 2
   printf -- '--tag\nbg-backup=1\n'
   printf -- '--tag\njob=%s\n' "${job}"
   [ -n "${run_id}" ] && printf -- '--tag\nrun=%s\n' "${run_id}"
@@ -300,7 +324,7 @@ restic_build_backup_args() {
   printf -- '--tag\nkind=files\n'
 
   [ "${JOB_ONE_FILE_SYSTEM:-0}" = "1" ] && printf -- '--one-file-system\n'
-  [ "${JOB_EXCLUDE_CACHES:-0}" = "1" ]  && printf -- '--exclude-caches\n'
+  [ "${JOB_EXCLUDE_CACHES:-0}" = "1" ] && printf -- '--exclude-caches\n'
 
   if [ -n "${JOB_EXCLUDE_FILE}" ] && [ -r "${JOB_EXCLUDE_FILE}" ]; then
     printf -- '--exclude-file\n%s\n' "${JOB_EXCLUDE_FILE}"
@@ -309,7 +333,7 @@ restic_build_backup_args() {
     [ -n "${e}" ] && printf -- '--exclude\n%s\n' "${e}"
   done
   [ -n "${JOB_EXCLUDE_LARGER_THAN}" ] && printf -- '--exclude-larger-than\n%s\n' "${JOB_EXCLUDE_LARGER_THAN}"
-  [ -n "${JOB_EXCLUDE_IF_PRESENT}" ]  && printf -- '--exclude-if-present\n%s\n' "${JOB_EXCLUDE_IF_PRESENT}"
+  [ -n "${JOB_EXCLUDE_IF_PRESENT}" ] && printf -- '--exclude-if-present\n%s\n' "${JOB_EXCLUDE_IF_PRESENT}"
 
   for p in "${JOB_PATHS[@]:-}" "${JOB_EXTRA_PATHS[@]:-}"; do
     [ -n "${p}" ] && printf '%s\n' "${p}"
@@ -337,9 +361,15 @@ restic_snapshot_age_hours() {
   # `then` is a shell keyword: using it as a variable name parses today but is
   # fragile and makes the surrounding `local` ambiguous to readers and linters.
   local t="$1" snap_epoch now
-  [ -n "${t}" ] || { printf ''; return 0; }
+  [ -n "${t}" ] || {
+    printf ''
+    return 0
+  }
   snap_epoch="$(date -u -d "${t}" '+%s' 2>/dev/null || echo 0)"
-  [ "${snap_epoch}" = "0" ] && { printf ''; return 0; }
+  [ "${snap_epoch}" = "0" ] && {
+    printf ''
+    return 0
+  }
   now="$(now_epoch)"
   awk -v a="${now}" -v b="${snap_epoch}" 'BEGIN{printf "%.1f", (a-b)/3600}'
 }
@@ -376,7 +406,8 @@ restic_init_if_needed() {
   restic_exec cat config >/dev/null 2>&1 || rc=$?
   case "${rc}" in
     12)
-      die "${EX_REPO}" "The repository exists but the key is wrong - refusing to touch it." ;;
+      die "${EX_REPO}" "The repository exists but the key is wrong - refusing to touch it."
+      ;;
   esac
   log "Initialising repository"
   restic_exec init || die "${EX_REPO}" "restic init failed"

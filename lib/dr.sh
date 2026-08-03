@@ -25,15 +25,20 @@ _BGB_DR_SOURCED=1
 : "${BGB_FACTS_DIR:=/var/lib/bg-backup/facts}"
 
 cmd_dr() {
-  local sub="${1:-}"; shift || true
+  local sub="${1:-}"
+  shift || true
   case "${sub}" in
-    bootstrap)  dr_bootstrap "$@" ;;
-    plan)       dr_plan "$@" ;;
-    run)        dr_run "$@" ;;
-    verify)     dr_verify "$@" ;;
+    bootstrap) dr_bootstrap "$@" ;;
+    plan) dr_plan "$@" ;;
+    run) dr_run "$@" ;;
+    verify) dr_verify "$@" ;;
     bare-metal) dr_bare_metal "$@" ;;
-    ''|--help|-h) usage_dr ;;
-    *) err "Unknown subcommand: dr ${sub}"; usage_dr; exit "${EX_USAGE}" ;;
+    '' | --help | -h) usage_dr ;;
+    *)
+      err "Unknown subcommand: dr ${sub}"
+      usage_dr
+      exit "${EX_USAGE}"
+      ;;
   esac
 }
 
@@ -44,11 +49,26 @@ dr_bootstrap() {
   local bundle="" bundle_url="" repo="" password_file="" snapshot=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --bundle)        bundle="$2"; shift 2 ;;
-      --bundle-url)    bundle_url="$2"; shift 2 ;;
-      --repo)          repo="$2"; shift 2 ;;
-      --password-file) password_file="$2"; shift 2 ;;
-      --snapshot)      snapshot="$2"; shift 2 ;;
+      --bundle)
+        bundle="$2"
+        shift 2
+        ;;
+      --bundle-url)
+        bundle_url="$2"
+        shift 2
+        ;;
+      --repo)
+        repo="$2"
+        shift 2
+        ;;
+      --password-file)
+        password_file="$2"
+        shift 2
+        ;;
+      --snapshot)
+        snapshot="$2"
+        shift 2
+        ;;
       *) shift ;;
     esac
   done
@@ -61,17 +81,26 @@ dr_bootstrap() {
     bundle="$(tmp_root)/bundle.download"
     log "Fetching the bundle from ${bundle_url}"
     case "${bundle_url}" in
-      s3://*)  have aws && aws s3 cp "${bundle_url}" "${bundle}" >/dev/null \
-                 || die "${EX_PRECOND}" "Could not fetch the bundle (aws cli required)" ;;
-      http*)   curl -fsSL -o "${bundle}" "${bundle_url}" \
-                 || die "${EX_PRECOND}" "Could not fetch the bundle" ;;
-      *)       die "${EX_USAGE}" "Unsupported bundle URL: ${bundle_url}" ;;
+      s3://*) have aws && aws s3 cp "${bundle_url}" "${bundle}" >/dev/null \
+        || die "${EX_PRECOND}" "Could not fetch the bundle (aws cli required)" ;;
+      http*) curl -fsSL -o "${bundle}" "${bundle_url}" \
+        || die "${EX_PRECOND}" "Could not fetch the bundle" ;;
+      *) die "${EX_USAGE}" "Unsupported bundle URL: ${bundle_url}" ;;
     esac
     # Preserve the suffix so config import can pick the right decryptor.
     case "${bundle_url}" in
-      *.age) mv "${bundle}" "${bundle}.age"; bundle="${bundle}.age" ;;
-      *.gpg) mv "${bundle}" "${bundle}.gpg"; bundle="${bundle}.gpg" ;;
-      *.enc) mv "${bundle}" "${bundle}.enc"; bundle="${bundle}.enc" ;;
+      *.age)
+        mv "${bundle}" "${bundle}.age"
+        bundle="${bundle}.age"
+        ;;
+      *.gpg)
+        mv "${bundle}" "${bundle}.gpg"
+        bundle="${bundle}.gpg"
+        ;;
+      *.enc)
+        mv "${bundle}" "${bundle}.enc"
+        bundle="${bundle}.enc"
+        ;;
     esac
   fi
 
@@ -103,7 +132,10 @@ dr_bootstrap() {
     passphrase="$(cat "${password_file}")"
   elif [ -t 0 ]; then
     printf 'Repository passphrase: ' >&2
-    stty -echo 2>/dev/null || true; read -r passphrase; stty echo 2>/dev/null || true; printf '\n' >&2
+    stty -echo 2>/dev/null || true
+    read -r passphrase
+    stty echo 2>/dev/null || true
+    printf '\n' >&2
   fi
   [ -n "${passphrase}" ] || die "${EX_USAGE}" "No repository passphrase"
   redact_register "${passphrase}"
@@ -112,12 +144,18 @@ dr_bootstrap() {
   case "${repo}" in
     s3:*)
       if [ -t 0 ]; then
-        printf 'S3 access key id: ' >&2; read -r s3key
+        printf 'S3 access key id: ' >&2
+        read -r s3key
         printf 'S3 secret access key: ' >&2
-        stty -echo 2>/dev/null || true; read -r s3secret; stty echo 2>/dev/null || true; printf '\n' >&2
-        printf 'S3 region [us-east-1]: ' >&2; read -r s3region
+        stty -echo 2>/dev/null || true
+        read -r s3secret
+        stty echo 2>/dev/null || true
+        printf '\n' >&2
+        printf 'S3 region [us-east-1]: ' >&2
+        read -r s3region
         [ -z "${s3region}" ] && s3region="us-east-1"
-      fi ;;
+      fi
+      ;;
   esac
 
   local keyfile="${BGB_CONFDIR}/credentials/repo.key"
@@ -142,7 +180,7 @@ dr_bootstrap() {
     snap="${snapshot}"
   else
     snap="$(restic_capture snapshots --tag bg-backup-config --json 2>/dev/null \
-            | jq -r 'sort_by(.time) | last | .short_id // empty')"
+      | jq -r 'sort_by(.time) | last | .short_id // empty')"
   fi
 
   if [ -z "${snap}" ]; then
@@ -154,7 +192,8 @@ dr_bootstrap() {
   fi
 
   log "Restoring /etc/bg-backup from snapshot ${snap}"
-  local staging; staging="$(tmp_root)/cfg"
+  local staging
+  staging="$(tmp_root)/cfg"
   install -d -m 0700 "${staging}"
   restic_exec restore "${snap}" --target "${staging}" --include "${BGB_CONFDIR}" \
     || die "${EX_REPO}" "Could not restore the configuration"
@@ -174,7 +213,7 @@ dr_bootstrap() {
       for f in "${staging}${BGB_CONFDIR}/credentials"/*; do
         [ -e "${f}" ] || continue
         case "$(basename "${f}")" in
-          repo.env|repo.key) continue ;;
+          repo.env | repo.key) continue ;;
           *) cp -a "${f}" "${BGB_CONFDIR}/credentials/" ;;
         esac
       done
@@ -201,8 +240,14 @@ dr_plan() {
   local run="" out=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --run) run="$2"; shift 2 ;;
-      --out) out="$2"; shift 2 ;;
+      --run)
+        run="$2"
+        shift 2
+        ;;
+      --out)
+        out="$2"
+        shift 2
+        ;;
       *) shift ;;
     esac
   done
@@ -235,21 +280,28 @@ dr_plan_render() {
   local s_host s_os s_ver s_arch s_kernel s_virt s_fw
   # shellcheck disable=SC1090
   . "${f}"
-  s_host="${hostname:-?}"; s_os="${os_id:-?}"; s_ver="${os_version:-?}"
-  s_arch="${arch:-?}"; s_kernel="${kernel:-?}"; s_virt="${virt:-?}"; s_fw="${firmware:-?}"
+  s_host="${hostname:-?}"
+  s_os="${os_id:-?}"
+  s_ver="${os_version:-?}"
+  s_arch="${arch:-?}"
+  s_kernel="${kernel:-?}"
+  s_virt="${virt:-?}"
+  s_fw="${firmware:-?}"
 
   local t_os t_ver t_arch
   # shellcheck disable=SC1091
   . /etc/os-release 2>/dev/null || true
-  t_os="${ID:-?}"; t_ver="${VERSION_ID:-?}"; t_arch="$(uname -m)"
+  t_os="${ID:-?}"
+  t_ver="${VERSION_ID:-?}"
+  t_arch="$(uname -m)"
 
   printf '\n%s1. SOURCE vs TARGET%s\n\n' "${C_BOLD}" "${C_RESET}"
   printf '  %-14s %-24s %s\n' "" "BACKED UP" "THIS HOST"
   printf '  %-14s %-24s %s\n' "hostname" "${s_host}" "$(fqdn)"
-  printf '  %-14s %-24s %s\n' "os"       "${s_os} ${s_ver}" "${t_os} ${t_ver}"
-  printf '  %-14s %-24s %s\n' "arch"     "${s_arch}" "${t_arch}"
-  printf '  %-14s %-24s %s\n' "kernel"   "${s_kernel}" "$(uname -r)"
-  printf '  %-14s %-24s %s\n' "virt"     "${s_virt}" "$(systemd-detect-virt 2>/dev/null || echo unknown)"
+  printf '  %-14s %-24s %s\n' "os" "${s_os} ${s_ver}" "${t_os} ${t_ver}"
+  printf '  %-14s %-24s %s\n' "arch" "${s_arch}" "${t_arch}"
+  printf '  %-14s %-24s %s\n' "kernel" "${s_kernel}" "$(uname -r)"
+  printf '  %-14s %-24s %s\n' "virt" "${s_virt}" "$(systemd-detect-virt 2>/dev/null || echo unknown)"
   printf '  %-14s %-24s %s\n' "firmware" "${s_fw}" "$([ -d /sys/firmware/efi ] && echo uefi || echo bios)"
 
   local blocked=0
@@ -299,7 +351,7 @@ dr_plan_render() {
       [ -n "${uuid}" ] || continue
       if ! blkid 2>/dev/null | grep -q "\"${uuid}\""; then
         printf '  %sCHANGED%s %s had UUID %s - not present on this host\n' "${C_YELLOW}" "${C_RESET}" "${dev}" "${uuid}"
-        changed=$(( changed + 1 ))
+        changed=$((changed + 1))
       fi
     done <"${BGB_FACTS_DIR}/disk-blkid.txt"
     if [ "${changed}" -eq 0 ]; then
@@ -337,7 +389,7 @@ dr_plan_render() {
   if [ -r "${mf}" ] && have jq; then
     printf '  %s compose project(s), %s volume(s), %s network(s)\n' \
       "$(jq '.projects | length' "${mf}" 2>/dev/null || echo '?')" \
-      "$(jq '.volumes | length'  "${mf}" 2>/dev/null || echo '?')" \
+      "$(jq '.volumes | length' "${mf}" 2>/dev/null || echo '?')" \
       "$(jq '.networks | length' "${mf}" 2>/dev/null || echo '?')"
     jq -r '.projects[]? | "    - \(.name) (\(.containers | length) containers)"' "${mf}" 2>/dev/null
     printf '\n  Order: networks (with recorded subnets) -> volumes -> compose files\n'
@@ -349,7 +401,7 @@ dr_plan_render() {
 
   # --- Databases -------------------------------------------------------------
   printf '\n%s6. DATABASE DUMPS%s\n\n' "${C_BOLD}" "${C_RESET}"
-  if ( repo_env_load ) >/dev/null 2>&1 && have jq; then
+  if (repo_env_load) >/dev/null 2>&1 && have jq; then
     repo_env_load >/dev/null 2>&1 || true
     local -a args=(snapshots --json)
     # AND: dumps OF THIS RUN. The OR form would list every dump ever taken and
@@ -357,7 +409,7 @@ dr_plan_render() {
     mapfile -t -O "${#args[@]}" args < <(restic_tag_filter_args kind=dbdump "${run:+run=${run}}")
     restic_capture "${args[@]}" 2>/dev/null \
       | jq -r 'sort_by(.time) | .[] | "    - \(.short_id)  \(.time[0:19])  \((.tags//[]) | map(select(startswith("container="))) | join(""))"' \
-      2>/dev/null | tail -n 20
+        2>/dev/null | tail -n 20
   else
     printf '  (repository not reachable - cannot list)\n'
   fi
@@ -399,10 +451,22 @@ dr_run() {
   local phase="" dry=0 allow_os_upgrade=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --phase) phase="$2"; shift 2 ;;
-      --phase=*) phase="${1#*=}"; shift ;;
-      --dry-run) dry=1; shift ;;
-      --allow-os-upgrade) allow_os_upgrade=1; shift ;;
+      --phase)
+        phase="$2"
+        shift 2
+        ;;
+      --phase=*)
+        phase="${1#*=}"
+        shift
+        ;;
+      --dry-run)
+        dry=1
+        shift
+        ;;
+      --allow-os-upgrade)
+        allow_os_upgrade=1
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -416,14 +480,15 @@ dr_run() {
   [ "${dry}" = "1" ] && BGB_DRY_RUN=1
 
   case "${phase}" in
-    system)    dr_phase_system "${allow_os_upgrade}" ;;
-    docker)    dr_phase_docker ;;
+    system) dr_phase_system "${allow_os_upgrade}" ;;
+    docker) dr_phase_docker ;;
     databases) dr_phase_databases ;;
     all)
       dr_phase_system "${allow_os_upgrade}" || return $?
       dr_phase_docker || return $?
       dr_phase_databases || return $?
-      dr_verify ;;
+      dr_verify
+      ;;
     *) die "${EX_USAGE}" "Unknown phase: ${phase}" ;;
   esac
 }
@@ -444,9 +509,15 @@ dr_phase_system() {
 
 dr_restore_apt_config() {
   local t="${BGB_FACTS_DIR}/apt-config.tar"
-  [ -r "${t}" ] || { warn "No APT configuration in the facts directory"; return 0; }
+  [ -r "${t}" ] || {
+    warn "No APT configuration in the facts directory"
+    return 0
+  }
   log "Restoring APT sources and keyrings"
-  [ "${BGB_DRY_RUN}" = "1" ] && { log "[dry-run] tar -C / -xf ${t}"; return 0; }
+  [ "${BGB_DRY_RUN}" = "1" ] && {
+    log "[dry-run] tar -C / -xf ${t}"
+    return 0
+  }
   tar -C / -xf "${t}"
 
   log "Refreshing package lists"
@@ -467,14 +538,18 @@ dr_restore_apt_config() {
 dr_install_packages() {
   local manual="${BGB_FACTS_DIR}/packages-manual.txt"
   local hold="${BGB_FACTS_DIR}/packages-hold.txt"
-  [ -r "${manual}" ] || { warn "No package list in the facts directory"; return 0; }
+  [ -r "${manual}" ] || {
+    warn "No package list in the facts directory"
+    return 0
+  }
 
   if [ -s "${hold}" ]; then
     log "Re-applying package holds before installing"
     [ "${BGB_DRY_RUN}" = "1" ] || xargs -r apt-mark hold <"${hold}" >/dev/null
   fi
 
-  local n; n="$(grep -c '^' "${manual}")"
+  local n
+  n="$(grep -c '^' "${manual}")"
   log "Installing ${n} package(s)"
   if [ "${BGB_DRY_RUN}" = "1" ]; then
     log "[dry-run] apt-get install --no-install-recommends \$(cat ${manual})"
@@ -489,7 +564,10 @@ dr_install_packages() {
     while IFS= read -r p; do
       [ -n "${p}" ] || continue
       apt-get install -y --no-install-recommends "${p}" >/dev/null 2>&1 \
-        || { printf '%s\n' "${p}" >>"${failed}"; warn "could not install: ${p}"; }
+        || {
+          printf '%s\n' "${p}" >>"${failed}"
+          warn "could not install: ${p}"
+        }
     done <"${manual}"
     if [ -s "${failed}" ]; then
       warn "$(grep -c '^' "${failed}") package(s) could not be installed - see ${failed}"
@@ -500,7 +578,10 @@ dr_install_packages() {
 dr_reconcile_accounts() {
   local pw="${BGB_FACTS_DIR}/users-passwd.txt"
   local gr="${BGB_FACTS_DIR}/users-group.txt"
-  [ -r "${pw}" ] || { warn "No account facts"; return 0; }
+  [ -r "${pw}" ] || {
+    warn "No account facts"
+    return 0
+  }
 
   log "Reconciling users and groups"
   local -a remap=()
@@ -509,7 +590,8 @@ dr_reconcile_accounts() {
   while IFS=: read -r name pass gid _; do
     [ -n "${name}" ] || continue
     [ "${gid}" -lt 1000 ] 2>/dev/null && getent group "${name}" >/dev/null 2>&1 && continue
-    local cur; cur="$(getent group "${name}" | cut -d: -f3)"
+    local cur
+    cur="$(getent group "${name}" | cut -d: -f3)"
     if [ -z "${cur}" ]; then
       if ! getent group "${gid}" >/dev/null 2>&1; then
         [ "${BGB_DRY_RUN}" = "1" ] || groupadd --gid "${gid}" "${name}" 2>/dev/null || true
@@ -525,7 +607,8 @@ dr_reconcile_accounts() {
   while IFS=: read -r name pass uid gid gecos home shell; do
     [ -n "${name}" ] || continue
     [ "${uid}" -lt 1000 ] 2>/dev/null && getent passwd "${name}" >/dev/null 2>&1 && continue
-    local cur; cur="$(getent passwd "${name}" | cut -d: -f3)"
+    local cur
+    cur="$(getent passwd "${name}" | cut -d: -f3)"
     if [ -z "${cur}" ]; then
       if ! getent passwd "${uid}" >/dev/null 2>&1; then
         [ "${BGB_DRY_RUN}" = "1" ] || useradd --uid "${uid}" --gid "${gid}" -M \
@@ -577,7 +660,10 @@ EOF
 dr_restore_payload_dirs() {
   local snap
   snap="$(restore_resolve_snapshot "" "" "" "" files)"
-  [ -n "${snap}" ] || { warn "No file snapshot found"; return 0; }
+  [ -n "${snap}" ] || {
+    warn "No file snapshot found"
+    return 0
+  }
 
   log "Restoring payload directories from ${snap}"
   local -a includes=(/etc /root /home /opt /srv /usr/local /var/www /data /var/docker)
@@ -589,7 +675,7 @@ dr_restore_payload_dirs() {
   # safe here; they are staged separately in dr_stage_dangerous.
   local class glob
   while read -r class glob; do
-    case "${class}" in NEVER|STAGED) args+=(--exclude "${glob}") ;; esac
+    case "${class}" in NEVER | STAGED) args+=(--exclude "${glob}") ;; esac
   done < <(grep -E '^(NEVER|STAGED)' "$(restore_unsafe_list)" 2>/dev/null || true)
 
   restic_exec_logged "${BGB_LOG_DIR}/dr-restore.log" "${args[@]}" \
@@ -635,12 +721,12 @@ dr_enable_units() {
   local unit missing=0
   while read -r unit _; do
     [ -n "${unit}" ] || continue
-    case "${unit}" in *.service|*.timer|*.socket|*.target|*.path|*.mount) ;; *) continue ;; esac
+    case "${unit}" in *.service | *.timer | *.socket | *.target | *.path | *.mount) ;; *) continue ;; esac
     if systemctl list-unit-files "${unit}" >/dev/null 2>&1; then
       [ "${BGB_DRY_RUN}" = "1" ] || systemctl enable "${unit}" >/dev/null 2>&1 || true
     else
       warn "unit no longer exists: ${unit}"
-      missing=$(( missing + 1 ))
+      missing=$((missing + 1))
     fi
   done <"${f}"
   # Units that vanished are the best early warning that a package install
@@ -663,12 +749,18 @@ dr_phase_docker() {
   local net subnet gateway driver
   while IFS=$'\t' read -r net driver subnet gateway; do
     [ -n "${net}" ] || continue
-    docker network inspect "${net}" >/dev/null 2>&1 && { debug "network exists: ${net}"; continue; }
+    docker network inspect "${net}" >/dev/null 2>&1 && {
+      debug "network exists: ${net}"
+      continue
+    }
     local -a a=(network create --driver "${driver:-bridge}")
     [ -n "${subnet}" ] && [ "${subnet}" != "null" ] && a+=(--subnet "${subnet}")
     [ -n "${gateway}" ] && [ "${gateway}" != "null" ] && a+=(--gateway "${gateway}")
     a+=("${net}")
-    [ "${BGB_DRY_RUN}" = "1" ] && { log "[dry-run] docker ${a[*]}"; continue; }
+    [ "${BGB_DRY_RUN}" = "1" ] && {
+      log "[dry-run] docker ${a[*]}"
+      continue
+    }
     docker "${a[@]}" >/dev/null && log "created network ${net} (${subnet:-auto})"
   done < <(jq -r '.networks[]? | [.name, .driver, (.ipam.Config[0].Subnet // ""), (.ipam.Config[0].Gateway // "")] | @tsv' "${mf}")
 
@@ -678,18 +770,25 @@ dr_phase_docker() {
   while IFS=$'\t' read -r vol vdriver; do
     [ -n "${vol}" ] || continue
     docker volume inspect "${vol}" >/dev/null 2>&1 && continue
-    [ "${BGB_DRY_RUN}" = "1" ] && { log "[dry-run] docker volume create ${vol}"; continue; }
+    [ "${BGB_DRY_RUN}" = "1" ] && {
+      log "[dry-run] docker volume create ${vol}"
+      continue
+    }
     docker volume create --driver "${vdriver:-local}" "${vol}" >/dev/null && log "created volume ${vol}"
   done < <(jq -r '.volumes[]? | [.name, .driver] | @tsv' "${mf}")
 
   # 3. Volume contents, while nothing is running.
   log "Restoring volume contents"
-  local snap; snap="$(restore_resolve_snapshot "" "" "" "" files)"
+  local snap
+  snap="$(restore_resolve_snapshot "" "" "" "" files)"
   if [ -n "${snap}" ]; then
     local mp
     while IFS= read -r mp; do
       [ -n "${mp}" ] || continue
-      [ "${BGB_DRY_RUN}" = "1" ] && { log "[dry-run] restore ${mp}"; continue; }
+      [ "${BGB_DRY_RUN}" = "1" ] && {
+        log "[dry-run] restore ${mp}"
+        continue
+      }
       restic_exec restore "${snap}" --target / --include "${mp}" >/dev/null 2>&1 \
         || warn "could not restore ${mp}"
     done < <(jq -r '.volumes[]?.mountpoint // empty' "${mf}")
@@ -702,10 +801,16 @@ dr_phase_docker() {
   local project wd
   while IFS=$'\t' read -r project wd; do
     [ -n "${project}" ] || continue
-    [ -d "${wd}" ] || { warn "working directory missing for '${project}': ${wd}"; continue; }
+    [ -d "${wd}" ] || {
+      warn "working directory missing for '${project}': ${wd}"
+      continue
+    }
     log "Starting compose project '${project}' in ${wd}"
-    [ "${BGB_DRY_RUN}" = "1" ] && { log "[dry-run] docker compose -p ${project} up -d"; continue; }
-    ( cd "${wd}" && docker compose up -d ) || warn "compose up failed for '${project}'"
+    [ "${BGB_DRY_RUN}" = "1" ] && {
+      log "[dry-run] docker compose -p ${project} up -d"
+      continue
+    }
+    (cd "${wd}" && docker compose up -d) || warn "compose up failed for '${project}'"
   done < <(jq -r '.projects[]? | [.name, (.containers[0].working_dir // "")] | @tsv' "${mf}")
 }
 
@@ -715,7 +820,10 @@ dr_pull_images() {
   while IFS=$'\t' read -r tag ref; do
     [ -n "${tag}" ] || continue
     if docker image inspect "${tag}" >/dev/null 2>&1; then continue; fi
-    [ "${BGB_DRY_RUN}" = "1" ] && { log "[dry-run] docker pull ${ref:-${tag}}"; continue; }
+    [ "${BGB_DRY_RUN}" = "1" ] && {
+      log "[dry-run] docker pull ${ref:-${tag}}"
+      continue
+    }
 
     rc=0
     docker pull "${ref:-${tag}}" >/dev/null 2>&1 || rc=$?
@@ -728,13 +836,14 @@ dr_pull_images() {
     fi
 
     log "Registry pull failed for ${tag} - looking for an exported copy"
-    local safe; safe="$(printf '%s' "${tag}" | tr -c 'A-Za-z0-9._-' '_')"
+    local safe
+    safe="$(printf '%s' "${tag}" | tr -c 'A-Za-z0-9._-' '_')"
     local isnap
     # AND, and here the OR form was actively dangerous: it would have matched
     # EVERY exported image, taken the most recent one, and `docker load`ed the
     # wrong image under the right name during a disaster recovery.
     isnap="$(restic_capture snapshots --json --tag "kind=image,image=${tag}" 2>/dev/null \
-             | jq -r 'sort_by(.time) | last | .short_id // empty')"
+      | jq -r 'sort_by(.time) | last | .short_id // empty')"
     if [ -n "${isnap}" ]; then
       restic_exec dump "${isnap}" "/images/${safe}.tar" | docker load \
         && log "loaded ${tag} from the repository" \
@@ -744,16 +853,16 @@ dr_pull_images() {
       err "It is not in any registry and was never exported."
       err "The containers using it cannot be recreated."
     fi
-  # .image_ref, NOT a hardcoded "". The second field is the digest reference this
-  # function exists to use; with the empty string it always fell through to
-  # `docker pull <tag>`, re-resolving :latest to whatever is current - while
-  # logging "Pulling images by digest". The re-tagging below was dead code for
-  # the same reason. An operator-facing claim that is simply untrue is worse
-  # than not having the feature.
-  #
-  # image_ref may legitimately be a bare tag: an image built locally and never
-  # pushed has no RepoDigest. That case is reported by docker_warn_local_images()
-  # at backup time and handled by the exported-tarball fallback below.
+    # .image_ref, NOT a hardcoded "". The second field is the digest reference this
+    # function exists to use; with the empty string it always fell through to
+    # `docker pull <tag>`, re-resolving :latest to whatever is current - while
+    # logging "Pulling images by digest". The re-tagging below was dead code for
+    # the same reason. An operator-facing claim that is simply untrue is worse
+    # than not having the feature.
+    #
+    # image_ref may legitimately be a bare tag: an image built locally and never
+    # pushed has no RepoDigest. That case is reported by docker_warn_local_images()
+    # at backup time and handled by the exported-tarball fallback below.
   done < <(jq -r '.projects[]?.containers[]? | [.image, (.image_ref // "")] | @tsv' "${mf}" | sort -u)
 }
 
@@ -773,9 +882,10 @@ dr_phase_databases() {
       local health
       health="$(docker inspect "${c}" 2>/dev/null | jq -r '.[0].State.Health.Status // "none"')"
       case "${health}" in
-        healthy|none) break ;;
+        healthy | none) break ;;
       esac
-      sleep 5; waited=$(( waited + 5 ))
+      sleep 5
+      waited=$((waited + 5))
     done
     [ "${waited}" -ge 300 ] && warn "${name} did not become healthy within 300s"
   done < <(docker ps -q 2>/dev/null || true)
@@ -790,10 +900,19 @@ dr_phase_databases() {
       warn "container '${container}' does not exist here - skipping"
       continue
     fi
-    db_load_engine "${engine}" || { warn "no engine module for ${engine}"; continue; }
+    db_load_engine "${engine}" || {
+      warn "no engine module for ${engine}"
+      continue
+    }
     local fn="db_${engine}_restore"
-    declare -F "${fn}" >/dev/null 2>&1 || { warn "engine ${engine} cannot restore"; continue; }
-    [ "${BGB_DRY_RUN}" = "1" ] && { log "[dry-run] restore ${path} into ${container}"; continue; }
+    declare -F "${fn}" >/dev/null 2>&1 || {
+      warn "engine ${engine} cannot restore"
+      continue
+    }
+    [ "${BGB_DRY_RUN}" = "1" ] && {
+      log "[dry-run] restore ${path} into ${container}"
+      continue
+    }
     restic_exec dump "${snap}" "/${path}" | "${fn}" "${container}" \
       && log "loaded ${path}" || err "FAILED to load ${path}"
   done < <(dr_list_dumps)
@@ -830,16 +949,23 @@ dr_verify() {
   if [ -r "${f}" ]; then
     local unit missing=0
     while read -r unit _; do
-      case "${unit}" in *.service|*.timer) ;; *) continue ;; esac
-      systemctl list-unit-files "${unit}" >/dev/null 2>&1 || missing=$(( missing + 1 ))
+      case "${unit}" in *.service | *.timer) ;; *) continue ;; esac
+      systemctl list-unit-files "${unit}" >/dev/null 2>&1 || missing=$((missing + 1))
     done <"${f}"
     [ "${missing}" -eq 0 ] && ok_mark "all backed-up units exist" \
-      || { warn_mark "${missing} unit(s) from the backup are missing"; warns=$(( warns + 1 )); }
+      || {
+        warn_mark "${missing} unit(s) from the backup are missing"
+        warns=$((warns + 1))
+      }
   fi
 
-  local failed; failed="$(systemctl list-units --state=failed --no-legend 2>/dev/null | grep -c '^' || echo 0)"
+  local failed
+  failed="$(systemctl list-units --state=failed --no-legend 2>/dev/null | grep -c '^' || echo 0)"
   [ "${failed}" -eq 0 ] && ok_mark "no failed units" \
-    || { bad_mark "${failed} failed unit(s): systemctl --failed"; fail=$(( fail + 1 )); }
+    || {
+      bad_mark "${failed} failed unit(s): systemctl --failed"
+      fail=$((fail + 1))
+    }
 
   if have docker && docker info >/dev/null 2>&1; then
     local running expected
@@ -849,17 +975,20 @@ dr_verify() {
       ok_mark "${running} container(s) running (expected ${expected})"
     elif [ "${expected}" -gt 0 ]; then
       bad_mark "${running} container(s) running, expected ${expected}"
-      fail=$(( fail + 1 ))
+      fail=$((fail + 1))
     fi
 
     local v empty=0
     while IFS= read -r v; do
       [ -n "${v}" ] || continue
-      local mp; mp="$(docker volume inspect "${v}" 2>/dev/null | jq -r '.[0].Mountpoint // ""')"
+      local mp
+      mp="$(docker volume inspect "${v}" 2>/dev/null | jq -r '.[0].Mountpoint // ""')"
       [ -n "${mp}" ] && [ -d "${mp}" ] && [ -z "$(ls -A "${mp}" 2>/dev/null)" ] && {
-        warn_mark "volume '${v}' is empty"; empty=$(( empty + 1 )); }
+        warn_mark "volume '${v}' is empty"
+        empty=$((empty + 1))
+      }
     done < <(jq -r '.volumes[]?.name // empty' "${BGB_FACTS_DIR}/docker-manifest.json" 2>/dev/null)
-    [ "${empty}" -eq 0 ] && ok_mark "no restored volume is empty" || warns=$(( warns + empty ))
+    [ "${empty}" -eq 0 ] && ok_mark "no restored volume is empty" || warns=$((warns + empty))
   fi
 
   # Listening ports against the ss capture: the cheapest proof that services are
@@ -868,11 +997,14 @@ dr_verify() {
     local want got missing_ports=0 port
     while IFS= read -r port; do
       [ -n "${port}" ] || continue
-      ss -lntu 2>/dev/null | grep -q ":${port}\b" || { warn_mark "port ${port} is not listening"; missing_ports=$(( missing_ports + 1 )); }
+      ss -lntu 2>/dev/null | grep -q ":${port}\b" || {
+        warn_mark "port ${port} is not listening"
+        missing_ports=$((missing_ports + 1))
+      }
     done < <(awk '{print $5}' "${BGB_FACTS_DIR}/net-listening.txt" 2>/dev/null \
-             | grep -oE '[0-9]+$' | sort -un | head -n 30)
+      | grep -oE '[0-9]+$' | sort -un | head -n 30)
     [ "${missing_ports}" -eq 0 ] && ok_mark "all previously listening ports are open again" \
-      || warns=$(( warns + missing_ports ))
+      || warns=$((warns + missing_ports))
   fi
 
   # The last and most important item: the new host must be protecting itself
@@ -883,7 +1015,7 @@ dr_verify() {
     printf '      bg-backup backup --all\n\n' >&2
   else
     bad_mark "this host cannot reach the backup repository"
-    fail=$(( fail + 1 ))
+    fail=$((fail + 1))
   fi
 
   printf '\n  %s failure(s), %s warning(s)\n\n' "${fail}" "${warns}" >&2
@@ -898,8 +1030,14 @@ dr_bare_metal() {
   local target="/mnt/target" in_rescue=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --target) target="$2"; shift 2 ;;
-      --i-am-in-rescue) in_rescue=1; shift ;;
+      --target)
+        target="$2"
+        shift 2
+        ;;
+      --i-am-in-rescue)
+        in_rescue=1
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -907,9 +1045,10 @@ dr_bare_metal() {
 
   # Refuse outside a rescue environment. Running this against a live root
   # filesystem would overwrite the system that is executing it.
-  local rootfs; rootfs="$(findmnt -no FSTYPE / 2>/dev/null || echo unknown)"
+  local rootfs
+  rootfs="$(findmnt -no FSTYPE / 2>/dev/null || echo unknown)"
   case "${rootfs}" in
-    squashfs|overlay|tmpfs|rootfs) in_rescue=1 ;;
+    squashfs | overlay | tmpfs | rootfs) in_rescue=1 ;;
   esac
   if [ "${in_rescue}" -ne 1 ]; then
     err "This does not look like a rescue or live environment (root fs: ${rootfs})."
@@ -950,7 +1089,8 @@ EOF
     local f
     for f in "${BGB_FACTS_DIR}"/disk-partitions-*.sfdisk; do
       [ -e "${f}" ] || continue
-      local dev; dev="/dev/$(basename "${f}" .sfdisk | sed 's/^disk-partitions-//')"
+      local dev
+      dev="/dev/$(basename "${f}" .sfdisk | sed 's/^disk-partitions-//')"
       printf '# Original layout of %s:\n' "${dev}"
       sed 's/^/#   /' "${f}"
       printf '# sfdisk %s < %s\n\n' "${dev}" "${f}"
@@ -1001,14 +1141,18 @@ dr_restore_project() {
   wd="$(jq -r --arg p "${project}" '.projects[] | select(.name==$p) | .containers[0].working_dir // ""' "${mf}")"
   [ -n "${wd}" ] || die "${EX_PRECOND}" "Project '${project}' is not in the manifest"
 
-  local snap; snap="$(restore_resolve_snapshot "${run}" "" "" "" files)"
+  local snap
+  snap="$(restore_resolve_snapshot "${run}" "" "" "" files)"
   [ -n "${snap}" ] || die "${EX_PRECOND}" "No snapshot matches"
 
   log "Restoring compose files for '${project}' from ${snap}"
   restic_exec restore "${snap}" --target / --include "${wd}" \
     || die "${EX_REPO}" "Could not restore ${wd}"
 
-  [ "${config_only}" = "1" ] && { log "Config-only restore finished"; return 0; }
+  [ "${config_only}" = "1" ] && {
+    log "Config-only restore finished"
+    return 0
+  }
 
   local v
   while IFS= read -r v; do
@@ -1021,7 +1165,7 @@ dr_restore_project() {
 
   if [ "${recreate}" = "1" ]; then
     log "Recreating the stack"
-    ( cd "${wd}" && docker compose up -d --force-recreate )
+    (cd "${wd}" && docker compose up -d --force-recreate)
   else
     log "Files restored. Bring the stack up with:  cd ${wd} && docker compose up -d"
   fi
@@ -1030,9 +1174,12 @@ dr_restore_project() {
 dr_restore_system() {
   local profile="$1" run="$2"
   case "${profile}" in
-    safe)   dr_restore_payload_dirs ;;
+    safe) dr_restore_payload_dirs ;;
     staged) dr_stage_dangerous ;;
-    full)   dr_restore_payload_dirs; dr_stage_dangerous ;;
+    full)
+      dr_restore_payload_dirs
+      dr_stage_dangerous
+      ;;
     *) die "${EX_USAGE}" "Unknown profile: ${profile} (safe|staged|full)" ;;
   esac
 }

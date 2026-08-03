@@ -17,9 +17,15 @@ SRC=/opt/bgb
 PASS=0
 FAIL=0
 
-ok()   { printf '  \033[32mPASS\033[0m %s\n' "$*"; PASS=$(( PASS + 1 )); }
-bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAIL=$(( FAIL + 1 )); }
-ck()   { [ "$1" -eq 0 ] && ok "$2" || bad "$2"; }
+ok() {
+  printf '  \033[32mPASS\033[0m %s\n' "$*"
+  PASS=$((PASS + 1))
+}
+bad() {
+  printf '  \033[31mFAIL\033[0m %s\n' "$*"
+  FAIL=$((FAIL + 1))
+}
+ck() { [ "$1" -eq 0 ] && ok "$2" || bad "$2"; }
 sect() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 REPO="s3:${BGB_IT_ENDPOINT}/${BGB_IT_BUCKET}/${BGB_IT_PREFIX}"
@@ -43,8 +49,10 @@ SOURCE_DIR="${SRC}" INSTALL_METHOD=local \
   bash "${SRC}/install.sh" >/tmp/install.log 2>&1
 ck $? "install.sh exits 0"
 
-[ -x /usr/local/sbin/bg-backup ]; ck $? "bg-backup is installed"
-[ -L /usr/local/sbin/bg-backup ]; ck $? "bg-backup is a symlink into the release directory"
+[ -x /usr/local/sbin/bg-backup ]
+ck $? "bg-backup is installed"
+[ -L /usr/local/sbin/bg-backup ]
+ck $? "bg-backup is a symlink into the release directory"
 readlink -f /usr/local/sbin/bg-backup | grep -q '^/opt/bg-backup/releases/'
 ck $? "the symlink points into /opt/bg-backup/releases"
 
@@ -59,7 +67,8 @@ ck $? "restic ${GOT} matches the pinned ${PINNED}"
 # The installer verified a GPG signature; re-assert the binary hash is stable so
 # a later step cannot have swapped it.
 sha256sum /usr/local/bin/restic >/tmp/restic.sha
-[ -s /tmp/restic.sha ]; ck $? "restic binary hashes"
+[ -s /tmp/restic.sha ]
+ck $? "restic binary hashes"
 
 grep -qi 'GPG signature verified\|Checksum verified' /tmp/install.log
 ck $? "the installer verified the download"
@@ -132,10 +141,12 @@ bg-backup backup e2e >/tmp/backup.log 2>&1
 ck $? "backup exits 0"
 
 N="$(bg-backup snapshots --job e2e --json 2>/dev/null | jq 'length')"
-[ "${N}" = "1" ]; ck $? "exactly one snapshot exists (got ${N:-none})"
+[ "${N}" = "1" ]
+ck $? "exactly one snapshot exists (got ${N:-none})"
 
 SNAP="$(bg-backup snapshots --job e2e --json 2>/dev/null | jq -r '.[0].short_id')"
-[ -n "${SNAP}" ]; ck $? "the snapshot id was recorded: ${SNAP:-none}"
+[ -n "${SNAP}" ]
+ck $? "the snapshot id was recorded: ${SNAP:-none}"
 
 # -----------------------------------------------------------------------------
 sect "6. an unreadable file yields exit 3, not 1"
@@ -153,12 +164,13 @@ chmod 000 /srv/data/locked
 # for a root exec the kernel derives the new permitted set from the bounding
 # set. Verified in this rig: the plain read succeeds, the setpriv read is denied.
 if command -v setpriv >/dev/null 2>&1 \
-   && ! setpriv --bounding-set=-dac_override,-dac_read_search \
-        cat /srv/data/locked/file >/dev/null 2>&1; then
+  && ! setpriv --bounding-set=-dac_override,-dac_read_search \
+    cat /srv/data/locked/file >/dev/null 2>&1; then
   setpriv --bounding-set=-dac_override,-dac_read_search \
     bg-backup backup e2e >/tmp/backup3.log 2>&1
   RC=$?
-  [ "${RC}" -eq 3 ]; ck $? "exit 3 on an unreadable source (got ${RC})"
+  [ "${RC}" -eq 3 ]
+  ck $? "exit 3 on an unreadable source (got ${RC})"
 else
   bad "cannot revoke DAC_OVERRIDE here - the exit-3 path was NOT exercised"
 fi
@@ -190,20 +202,22 @@ sect "7. forget refuses to delete everything"
 cp /etc/bg-backup/bg-backup.conf /tmp/bg-backup.conf.bak
 cp /etc/bg-backup/conf.d/50-e2e.conf /tmp/50-e2e.conf.bak
 sed -i 's/^\(BGB_DEFAULT_KEEP_[A-Z]*\)=.*/\1=""/' /etc/bg-backup/bg-backup.conf
-sed -i 's/^\(JOB_KEEP_[A-Z]*\)=.*/\1=""/'          /etc/bg-backup/conf.d/50-e2e.conf
+sed -i 's/^\(JOB_KEEP_[A-Z]*\)=.*/\1=""/' /etc/bg-backup/conf.d/50-e2e.conf
 
 grep -qE '^BGB_DEFAULT_KEEP_[A-Z]+=""' /etc/bg-backup/bg-backup.conf
 ck $? "the no-policy state was actually established"
 
 bg-backup forget --job e2e --apply --yes >/tmp/forget.log 2>&1
 RC=$?
-[ "${RC}" -eq 9 ]; ck $? "forget with no policy exits 9 (EX_SAFETY), got ${RC}"
+[ "${RC}" -eq 9 ]
+ck $? "forget with no policy exits 9 (EX_SAFETY), got ${RC}"
 
 N="$(bg-backup snapshots --job e2e --json 2>/dev/null | jq 'length')"
-[ "${N}" != "0" ]; ck $? "no snapshot was deleted"
+[ "${N}" != "0" ]
+ck $? "no snapshot was deleted"
 
 cp /tmp/bg-backup.conf.bak /etc/bg-backup/bg-backup.conf
-cp /tmp/50-e2e.conf.bak    /etc/bg-backup/conf.d/50-e2e.conf
+cp /tmp/50-e2e.conf.bak /etc/bg-backup/conf.d/50-e2e.conf
 
 # -----------------------------------------------------------------------------
 sect "8. restore reproduces content AND metadata"
@@ -212,7 +226,8 @@ bg-backup restore dir --path /srv/data --to /tmp/restore >/tmp/restore.log 2>&1
 ck $? "restore exits 0"
 
 R="$(find /tmp/restore -type d -name data 2>/dev/null | head -n1)"
-[ -n "${R}" ]; ck $? "the restored tree was found"
+[ -n "${R}" ]
+ck $? "the restored tree was found"
 
 if diff -r /srv/data "${R}" >/tmp/tree.diff 2>&1; then
   ok "content is identical"
@@ -223,16 +238,20 @@ else
 fi
 
 # A checksum-only assertion misses exactly the things that actually go wrong.
-[ -L "${R}/link.txt" ]; ck $? "the symlink is still a symlink"
-[ -f "${R}/empty.txt" ] && [ ! -s "${R}/empty.txt" ]; ck $? "the empty file is still empty"
+[ -L "${R}/link.txt" ]
+ck $? "the symlink is still a symlink"
+[ -f "${R}/empty.txt" ] && [ ! -s "${R}/empty.txt" ]
+ck $? "the empty file is still empty"
 
 A="$(stat -c '%a %U %G' /srv/data/plain.txt)"
 B="$(stat -c '%a %U %G' "${R}/plain.txt")"
-[ "${A}" = "${B}" ]; ck $? "mode and ownership preserved (${A})"
+[ "${A}" = "${B}" ]
+ck $? "mode and ownership preserved (${A})"
 
 X="$(sha256sum </srv/data/sub/bin.dat | cut -d' ' -f1)"
 Y="$(sha256sum <"${R}/sub/bin.dat" | cut -d' ' -f1)"
-[ "${X}" = "${Y}" ]; ck $? "binary content byte-identical"
+[ "${X}" = "${Y}" ]
+ck $? "binary content byte-identical"
 
 # -----------------------------------------------------------------------------
 sect "9. no secret appears in doctor output"
@@ -258,9 +277,12 @@ BEFORE="$(bg-backup snapshots --json 2>/dev/null | jq 'length')"
 FORCE=1 UNINSTALL=1 bash "${SRC}/install.sh" >/tmp/uninstall.log 2>&1
 ck $? "uninstall exits 0"
 
-[ ! -e /usr/local/sbin/bg-backup ]; ck $? "the binary is gone"
-[ ! -d /opt/bg-backup ]; ck $? "the install prefix is gone"
-[ -d /etc/bg-backup ]; ck $? "configuration is kept without --purge"
+[ ! -e /usr/local/sbin/bg-backup ]
+ck $? "the binary is gone"
+[ ! -d /opt/bg-backup ]
+ck $? "the install prefix is gone"
+[ -d /etc/bg-backup ]
+ck $? "configuration is kept without --purge"
 
 export RESTIC_REPOSITORY="${REPO}"
 export RESTIC_PASSWORD="${BGB_IT_RESTIC_PASSWORD}"

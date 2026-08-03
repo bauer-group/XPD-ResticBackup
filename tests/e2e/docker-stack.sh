@@ -32,13 +32,22 @@ SRC=/opt/bgb
 PASS=0
 FAIL=0
 
-ok()   { printf '  \033[32mPASS\033[0m %s\n' "$*"; PASS=$(( PASS + 1 )); }
-bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAIL=$(( FAIL + 1 )); }
-ck()   { [ "$1" -eq 0 ] && ok "$2" || bad "$2"; }
-eq()   { [ "$2" = "$3" ] && ok "$1 ($2)" || bad "$1: expected '$3', got '$2'"; }
+ok() {
+  printf '  \033[32mPASS\033[0m %s\n' "$*"
+  PASS=$((PASS + 1))
+}
+bad() {
+  printf '  \033[31mFAIL\033[0m %s\n' "$*"
+  FAIL=$((FAIL + 1))
+}
+ck() { [ "$1" -eq 0 ] && ok "$2" || bad "$2"; }
+eq() { [ "$2" = "$3" ] && ok "$1 ($2)" || bad "$1: expected '$3', got '$2'"; }
 sect() { printf '\n\033[1m%s\033[0m\n' "$*"; }
-log()  { printf '\033[36m[stack]\033[0m %s\n' "$*"; }
-die()  { printf '\033[31m[stack]\033[0m %s\n' "$*" >&2; exit 1; }
+log() { printf '\033[36m[stack]\033[0m %s\n' "$*"; }
+die() {
+  printf '\033[31m[stack]\033[0m %s\n' "$*" >&2
+  exit 1
+}
 
 REPO="s3:${BGB_IT_ENDPOINT}/${BGB_IT_BUCKET}/${BGB_IT_PREFIX}"
 export AWS_ACCESS_KEY_ID="${BGB_IT_ACCESS_KEY}"
@@ -51,11 +60,19 @@ sect "0. A Docker daemon of our own"
 if ! docker info >/dev/null 2>&1; then
   log "starting dockerd"
   dockerd >/var/log/dockerd.log 2>&1 &
-  for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  for _ in $(seq 1 60); do
+    docker info >/dev/null 2>&1 && break
+    sleep 1
+  done
 fi
-docker info >/dev/null 2>&1; ck $? "dockerd is up"
-docker info >/dev/null 2>&1 || { tail -20 /var/log/dockerd.log; exit 1; }
-docker compose version >/dev/null 2>&1; ck $? "the compose plugin is available"
+docker info >/dev/null 2>&1
+ck $? "dockerd is up"
+docker info >/dev/null 2>&1 || {
+  tail -20 /var/log/dockerd.log
+  exit 1
+}
+docker compose version >/dev/null 2>&1
+ck $? "the compose plugin is available"
 
 # -----------------------------------------------------------------------------
 sect "1. A realistic stack"
@@ -127,10 +144,13 @@ networks:
 YML
 
 log "starting the stack"
-( cd /srv/stack && docker compose up -d ) >/tmp/up.log 2>&1 || { tail -20 /tmp/up.log; die "compose up failed"; }
+(cd /srv/stack && docker compose up -d) >/tmp/up.log 2>&1 || {
+  tail -20 /tmp/up.log
+  die "compose up failed"
+}
 
 for _ in $(seq 1 90); do
-  h1="$(docker inspect --format '{{.State.Health.Status}}' shop-db-1      2>/dev/null || echo none)"
+  h1="$(docker inspect --format '{{.State.Health.Status}}' shop-db-1 2>/dev/null || echo none)"
   h2="$(docker inspect --format '{{.State.Health.Status}}' shop-mysqldb-1 2>/dev/null || echo none)"
   [ "${h1}" = healthy ] && [ "${h2}" = healthy ] && break
   sleep 2
@@ -183,8 +203,9 @@ WANT_SUBNET="$(docker network inspect shop_back --format '{{(index .IPAM.Config 
 
 # A rehearsal that restores an empty table proves nothing.
 eq "PostgreSQL seeded" "${WANT_PG_ROWS}" "50000"
-eq "MariaDB seeded"    "${WANT_MY_ROWS}" "50000"
-[ -n "${WANT_MY_FP}" ] && [ "${WANT_MY_FP}" != "NULL" ]; ck $? "MariaDB fingerprint is a real value"
+eq "MariaDB seeded" "${WANT_MY_ROWS}" "50000"
+[ -n "${WANT_MY_FP}" ] && [ "${WANT_MY_FP}" != "NULL" ]
+ck $? "MariaDB fingerprint is a real value"
 
 # -----------------------------------------------------------------------------
 sect "2. Install and configure the docker job"
@@ -232,14 +253,16 @@ ck $? "the docker job passes the config linter"
 
 bg-backup discover >/tmp/discover.log 2>&1
 ck $? "discover succeeds"
-grep -q 'shop' /tmp/discover.log; ck $? "discover finds the compose project"
+grep -q 'shop' /tmp/discover.log
+ck $? "discover finds the compose project"
 
 # -----------------------------------------------------------------------------
 sect "3. The backup itself"
 
 bg-backup backup dock >/tmp/backup.log 2>&1
 BRC=$?
-[ "${BRC}" -eq 0 ]; ck $? "backup exits 0 (got ${BRC})"
+[ "${BRC}" -eq 0 ]
+ck $? "backup exits 0 (got ${BRC})"
 [ "${BRC}" -eq 0 ] || sed 's/^/      /' /tmp/backup.log | grep -vE '^\s+\{' | tail -20
 
 # The single most important assertion in this file. A dump that fails must not
@@ -253,7 +276,8 @@ grep -qi 'command not found' /tmp/backup.log && bad "something called an undefin
 
 # docker-pause must always be reversed.
 docker ps --filter 'status=paused' --format '{{.Names}}' >/tmp/paused.txt 2>/dev/null
-[ ! -s /tmp/paused.txt ]; ck $? "no container was left paused"
+[ ! -s /tmp/paused.txt ]
+ck $? "no container was left paused"
 RUNNING="$(docker ps --format '{{.Names}}' | wc -l)"
 eq "all three containers still run" "${RUNNING}" "3"
 
@@ -261,7 +285,8 @@ eq "all three containers still run" "${RUNNING}" "3"
 sect "4. What the run recorded"
 
 RUN="$(bg-backup snapshots --job dock --json | jq -r 'sort_by(.time) | last | .tags[] | select(startswith("run="))' | sed 's/^run=//')"
-[ -n "${RUN}" ]; ck $? "the run id was recorded: ${RUN:-none}"
+[ -n "${RUN}" ]
+ck $? "the run id was recorded: ${RUN:-none}"
 
 N_DUMP="$(bg-backup snapshots --job dock --json | jq --arg r "run=${RUN}" '[.[] | select(.tags | index($r)) | select(.tags | index("kind=dbdump"))] | length')"
 eq "four dump snapshots exist" "${N_DUMP}" "4"
@@ -277,14 +302,16 @@ DUP="$(bg-backup snapshots --job dock --json \
 eq "no snapshot carries two kind= tags" "${DUP}" "0"
 
 MF=/var/lib/bg-backup/facts/docker-manifest.json
-[ -r "${MF}" ]; ck $? "the docker manifest was written"
+[ -r "${MF}" ]
+ck $? "the docker manifest was written"
 
 # image_ref is what makes a restore reproducible. image_id is the LOCAL config
 # id and identifies nothing a fresh host can pull.
 NO_REF="$(jq '[.projects[].containers[] | select((.image_ref // "") == "")] | length' "${MF}")"
 eq "every container has a pullable image_ref" "${NO_REF}" "0"
 DIGESTS="$(jq -r '[.projects[].containers[].image_ref | select(test("@sha256:"))] | length' "${MF}")"
-[ "${DIGESTS}" -ge 1 ]; ck $? "at least one image_ref is a registry digest (${DIGESTS})"
+[ "${DIGESTS}" -ge 1 ]
+ck $? "at least one image_ref is a registry digest (${DIGESTS})"
 
 SUBNET_IN_MF="$(jq -r '.networks[] | select(.name=="shop_back") | .ipam.Config[0].Subnet' "${MF}")"
 eq "the network subnet is in the manifest" "${SUBNET_IN_MF}" "${WANT_SUBNET}"
@@ -312,15 +339,18 @@ done < <(bg-backup snapshots --job dock --tag kind=dbdump --json | jq -r '.[].pa
 # -----------------------------------------------------------------------------
 sect "6. Destroy everything"
 
-( cd /srv/stack && docker compose down -v ) >/dev/null 2>&1
+(cd /srv/stack && docker compose down -v) >/dev/null 2>&1
 rm -rf /srv/stack
 docker image rm -f postgres:16-alpine mariadb:11 nginx:alpine >/dev/null 2>&1
 docker volume ls -q | xargs -r docker volume rm -f >/dev/null 2>&1
 docker network rm shop_back >/dev/null 2>&1
 
-[ ! -d /srv/stack ];                      ck $? "the compose files are gone"
-[ "$(docker ps -aq | wc -l)" -eq 0 ];     ck $? "no container remains"
-[ "$(docker volume ls -q | wc -l)" -eq 0 ]; ck $? "no volume remains"
+[ ! -d /srv/stack ]
+ck $? "the compose files are gone"
+[ "$(docker ps -aq | wc -l)" -eq 0 ]
+ck $? "no container remains"
+[ "$(docker volume ls -q | wc -l)" -eq 0 ]
+ck $? "no volume remains"
 
 # -----------------------------------------------------------------------------
 sect "7. Restore the project"
@@ -328,14 +358,18 @@ sect "7. Restore the project"
 cd /
 bg-backup restore project --name shop --run "${RUN}" --recreate --yes >/tmp/restore.log 2>&1
 RRC=$?
-[ "${RRC}" -eq 0 ]; ck $? "restore project --recreate exits 0 (got ${RRC})"
+[ "${RRC}" -eq 0 ]
+ck $? "restore project --recreate exits 0 (got ${RRC})"
 [ "${RRC}" -eq 0 ] || tail -15 /tmp/restore.log | sed 's/^/      /'
 
-[ -f /srv/stack/docker-compose.yml ]; ck $? "the compose file came back"
+[ -f /srv/stack/docker-compose.yml ]
+ck $? "the compose file came back"
 # .env is a dotfile: an `ls` without -a hides it, which is an easy way to
 # believe it was lost when it was not.
-[ -f /srv/stack/.env ];              ck $? "the .env came back"
-grep -q 'POSTGRES_PASSWORD' /srv/stack/.env; ck $? "the .env still carries its values"
+[ -f /srv/stack/.env ]
+ck $? "the .env came back"
+grep -q 'POSTGRES_PASSWORD' /srv/stack/.env
+ck $? "the .env still carries its values"
 
 for _ in $(seq 1 60); do
   docker exec shop-db-1 psql -U postgres -d shopdb -tAq -c 'SELECT 1' >/dev/null 2>&1 && break
@@ -358,28 +392,31 @@ GOT_VOL_FP="$(docker exec shop-web-1 sha256sum /var/cache/app/cache.bin 2>/dev/n
 GOT_BIND_FP="$(sha256sum /srv/stack/uploads/blob.bin 2>/dev/null | awk '{print $1}')"
 GOT_SUBNET="$(docker network inspect shop_back --format '{{(index .IPAM.Config 0).Subnet}}' 2>/dev/null)"
 
-eq "PostgreSQL row count"      "${GOT_PG_ROWS}"  "${WANT_PG_ROWS}"
-eq "PostgreSQL fingerprint"    "${GOT_PG_FP}"    "${WANT_PG_FP}"
-eq "PostgreSQL role survived"  "${GOT_ROLE}"     "1"
-eq "MariaDB row count"         "${GOT_MY_ROWS}"  "${WANT_MY_ROWS}"
-eq "MariaDB fingerprint"       "${GOT_MY_FP}"    "${WANT_MY_FP}"
-eq "named volume contents"     "${GOT_VOL_FP}"   "${WANT_VOL_FP}"
-eq "bind mount contents"       "${GOT_BIND_FP}"  "${WANT_BIND_FP}"
+eq "PostgreSQL row count" "${GOT_PG_ROWS}" "${WANT_PG_ROWS}"
+eq "PostgreSQL fingerprint" "${GOT_PG_FP}" "${WANT_PG_FP}"
+eq "PostgreSQL role survived" "${GOT_ROLE}" "1"
+eq "MariaDB row count" "${GOT_MY_ROWS}" "${WANT_MY_ROWS}"
+eq "MariaDB fingerprint" "${GOT_MY_FP}" "${WANT_MY_FP}"
+eq "named volume contents" "${GOT_VOL_FP}" "${WANT_VOL_FP}"
+eq "bind mount contents" "${GOT_BIND_FP}" "${WANT_BIND_FP}"
 
 # NOTE ON THIS ONE: compose recreates the subnet from the compose file, which
 # pins it. bg-backup records the subnet in the manifest but does not recreate
 # it, so a compose file that leaves the subnet to the daemon would come back on
 # a different one. This assertion proves the manifest and the stack agree - not
 # that bg-backup would restore an unpinned subnet.
-eq "network subnet"            "${GOT_SUBNET}"   "${WANT_SUBNET}"
+eq "network subnet" "${GOT_SUBNET}" "${WANT_SUBNET}"
 
 # -----------------------------------------------------------------------------
 sect "9. No secret leaked along the way"
 
 bg-backup doctor >/tmp/doctor.log 2>&1 || true
-! grep -q "${BGB_IT_SECRET_KEY}" /tmp/doctor.log;      ck $? "no S3 secret in doctor output"
-! grep -q "${BGB_IT_RESTIC_PASSWORD}" /tmp/doctor.log; ck $? "no passphrase in doctor output"
-! grep -rq 'pg-throwaway-rig-pw' /tmp/backup.log;      ck $? "no database password in the backup log"
+! grep -q "${BGB_IT_SECRET_KEY}" /tmp/doctor.log
+ck $? "no S3 secret in doctor output"
+! grep -q "${BGB_IT_RESTIC_PASSWORD}" /tmp/doctor.log
+ck $? "no passphrase in doctor output"
+! grep -rq 'pg-throwaway-rig-pw' /tmp/backup.log
+ck $? "no database password in the backup log"
 
 # -----------------------------------------------------------------------------
 printf '\n\033[1m%d passed, %d failed\033[0m\n\n' "${PASS}" "${FAIL}"

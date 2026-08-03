@@ -22,22 +22,71 @@ cmd_init() {
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --repo)              repo="$2"; shift 2 ;;
-      --repo=*)            repo="${1#*=}"; shift ;;
-      --password-file)     password_file="$2"; shift 2 ;;
-      --password-file=*)   password_file="${1#*=}"; shift ;;
-      --generate-password) generate=1; shift ;;
-      --s3-key)            s3_key="$2"; shift 2 ;;
-      --s3-key=*)          s3_key="${1#*=}"; shift ;;
-      --s3-secret)         s3_secret="$2"; shift 2 ;;
-      --s3-secret=*)       s3_secret="${1#*=}"; shift ;;
-      --s3-region)         s3_region="$2"; shift 2 ;;
-      --s3-region=*)       s3_region="${1#*=}"; shift ;;
-      --profile)           profile="$2"; shift 2 ;;
-      --profile=*)         profile="${1#*=}"; shift ;;
-      --non-interactive)   non_interactive=1; shift ;;
-      --force)             force=1; shift ;;
-      -*) err "Unknown flag for init: $1"; usage_init; exit "${EX_USAGE}" ;;
+      --repo)
+        repo="$2"
+        shift 2
+        ;;
+      --repo=*)
+        repo="${1#*=}"
+        shift
+        ;;
+      --password-file)
+        password_file="$2"
+        shift 2
+        ;;
+      --password-file=*)
+        password_file="${1#*=}"
+        shift
+        ;;
+      --generate-password)
+        generate=1
+        shift
+        ;;
+      --s3-key)
+        s3_key="$2"
+        shift 2
+        ;;
+      --s3-key=*)
+        s3_key="${1#*=}"
+        shift
+        ;;
+      --s3-secret)
+        s3_secret="$2"
+        shift 2
+        ;;
+      --s3-secret=*)
+        s3_secret="${1#*=}"
+        shift
+        ;;
+      --s3-region)
+        s3_region="$2"
+        shift 2
+        ;;
+      --s3-region=*)
+        s3_region="${1#*=}"
+        shift
+        ;;
+      --profile)
+        profile="$2"
+        shift 2
+        ;;
+      --profile=*)
+        profile="${1#*=}"
+        shift
+        ;;
+      --non-interactive)
+        non_interactive=1
+        shift
+        ;;
+      --force)
+        force=1
+        shift
+        ;;
+      -*)
+        err "Unknown flag for init: $1"
+        usage_init
+        exit "${EX_USAGE}"
+        ;;
       *) shift ;;
     esac
   done
@@ -78,7 +127,8 @@ cmd_init() {
   # A shared bucket makes the prefix load-bearing: it is what keeps this host's
   # snapshots separable from every other host's, and what `forget --host` and
   # `doctor` both rely on.
-  local host_fqdn; host_fqdn="$(fqdn)"
+  local host_fqdn
+  host_fqdn="$(fqdn)"
   case "${repo}" in
     *"${host_fqdn}") : ;;
     *)
@@ -123,7 +173,8 @@ cmd_init() {
   case "${repo}" in
     s3:*)
       if [ -z "${s3_key}" ] && [ "${non_interactive}" != "1" ]; then
-        printf 'S3 / MinIO access key id: ' >&2; read -r s3_key
+        printf 'S3 / MinIO access key id: ' >&2
+        read -r s3_key
       fi
       if [ -z "${s3_secret}" ] && [ "${non_interactive}" != "1" ]; then
         printf 'S3 / MinIO secret access key: ' >&2
@@ -147,7 +198,7 @@ cmd_init() {
   local rc=0
   restic_exec cat config >/dev/null 2>&1 || rc=$?
   case "${rc}" in
-    0)  log "Repository exists and the key works" ;;
+    0) log "Repository exists and the key works" ;;
     12) die "${EX_REPO}" "The repository exists but this passphrase does not open it. Refusing to touch it." ;;
     *)
       log "Repository not found - initialising"
@@ -204,15 +255,23 @@ Repository backend:
   3) REST server     (supports --append-only, the strongest ransomware control)
   4) Local directory (useful for a first test, NOT a backup on its own)
 EOF
-  printf 'Choice [1]: ' >&2; read -r kind
+  printf 'Choice [1]: ' >&2
+  read -r kind
   case "${kind:-1}" in
     2) printf 'sftp:user@host:/path/%s' "$(fqdn)" ;;
-    3) printf 'Base URL (https://backup.example.com/): ' >&2; read -r endpoint
-       printf 'rest:%s%s' "${endpoint%/}/" "$(fqdn)" ;;
+    3)
+      printf 'Base URL (https://backup.example.com/): ' >&2
+      read -r endpoint
+      printf 'rest:%s%s' "${endpoint%/}/" "$(fqdn)"
+      ;;
     4) printf '/var/backups/restic/%s' "$(fqdn)" ;;
-    *) printf 'S3 endpoint (e.g. https://eu-north1.s3.example.com): ' >&2; read -r endpoint
-       printf 'Bucket name: ' >&2; read -r bucket
-       printf 's3:%s/%s/%s' "${endpoint%/}" "${bucket}" "$(fqdn)" ;;
+    *)
+      printf 'S3 endpoint (e.g. https://eu-north1.s3.example.com): ' >&2
+      read -r endpoint
+      printf 'Bucket name: ' >&2
+      read -r bucket
+      printf 's3:%s/%s/%s' "${endpoint%/}" "${bucket}" "$(fqdn)"
+      ;;
   esac
 }
 
@@ -285,9 +344,12 @@ init_seed_jobs() {
   local -a jobs=()
   case "${profile}" in
     minimal) jobs=(90-config) ;;
-    server)  jobs=(10-system 90-config) ;;
-    docker)  jobs=(10-system 20-docker 90-config) ;;
-    *) warn "Unknown profile '${profile}', using 'server'"; jobs=(10-system 90-config) ;;
+    server) jobs=(10-system 90-config) ;;
+    docker) jobs=(10-system 20-docker 90-config) ;;
+    *)
+      warn "Unknown profile '${profile}', using 'server'"
+      jobs=(10-system 90-config)
+      ;;
   esac
 
   local base f target
@@ -332,8 +394,10 @@ host key without losing access to the repository.
 EOF
   confirm "Create an independent recovery key now?" || return 0
 
-  local pass; pass="$(init_generate_passphrase)"
-  local pf; pf="$(tmp_file "newkey.XXXXXX")"
+  local pass
+  pass="$(init_generate_passphrase)"
+  local pf
+  pf="$(tmp_file "newkey.XXXXXX")"
   printf '%s' "${pass}" >"${pf}"
   chmod 0400 "${pf}"
 
@@ -342,7 +406,10 @@ EOF
     printf '\n%sRECOVERY KEY PASSPHRASE - store this OFF this host, now:%s\n\n' "${C_BOLD}${C_YELLOW}" "${C_RESET}" >&2
     printf '    %s\n\n' "${pass}" >&2
     printf 'It is not written to disk anywhere on this machine.\n\n' >&2
-    [ -t 0 ] && { printf 'Press Enter once it is stored. ' >&2; read -r _; }
+    [ -t 0 ] && {
+      printf 'Press Enter once it is stored. ' >&2
+      read -r _
+    }
   else
     warn "Could not add the recovery key (continuing)"
   fi

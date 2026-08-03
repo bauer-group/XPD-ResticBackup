@@ -43,30 +43,31 @@ _email_recipients() {
 # whole point of the message, and nobody remembers the table at 3am.
 _email_explain_rc() {
   case "${1:-}" in
-    0)   printf 'success' ;;
-    1)   printf 'generic fatal error' ;;
-    2)   printf 'usage error' ;;
-    3)   printf 'partial - a snapshot exists, some sources were unreadable' ;;
-    4)   printf 'precondition failed - not root, missing dependency or invalid config' ;;
-    5)   printf 'another bg-backup run holds the lock' ;;
-    6)   printf 'repository unreachable, uninitialised or wrong key' ;;
-    7)   printf 'check or verify found damage' ;;
-    8)   printf 'a pre/post hook failed' ;;
-    9)   printf 'a safety rail refused a destructive operation' ;;
+    0) printf 'success' ;;
+    1) printf 'generic fatal error' ;;
+    2) printf 'usage error' ;;
+    3) printf 'partial - a snapshot exists, some sources were unreadable' ;;
+    4) printf 'precondition failed - not root, missing dependency or invalid config' ;;
+    5) printf 'another bg-backup run holds the lock' ;;
+    6) printf 'repository unreachable, uninitialised or wrong key' ;;
+    7) printf 'check or verify found damage' ;;
+    8) printf 'a pre/post hook failed' ;;
+    9) printf 'a safety rail refused a destructive operation' ;;
     130) printf 'interrupted' ;;
-    *)   printf 'unknown exit code' ;;
+    *) printf 'unknown exit code' ;;
   esac
 }
 
 # _email_should_send <event>
 _email_should_send() {
   case "${1:-}" in
-    failure|degraded|check_failed|verify_failed) return 0 ;;
+    failure | degraded | check_failed | verify_failed) return 0 ;;
     partial)
       # Only when the job declared that unreadable files are a real signal. On a
       # live filesystem exit 3 is routine, and mailing it is how this channel
       # gets muted.
-      [ "${JOB_PARTIAL_IS_FAILURE:-0}" = "1" ] ;;
+      [ "${JOB_PARTIAL_IS_FAILURE:-0}" = "1" ]
+      ;;
     *) return 1 ;;
   esac
 }
@@ -159,8 +160,10 @@ bgb_notify_email() {
   # On a host running msmtp, /usr/sbin/sendmail is msmtp's own compatibility
   # link, so this branch is the msmtp branch too.
   sendmail_bin=""
-  if [ -x /usr/sbin/sendmail ]; then sendmail_bin=/usr/sbin/sendmail
-  elif have sendmail; then sendmail_bin="$(command -v sendmail)"
+  if [ -x /usr/sbin/sendmail ]; then
+    sendmail_bin=/usr/sbin/sendmail
+  elif have sendmail; then
+    sendmail_bin="$(command -v sendmail)"
   fi
 
   if [ -n "${sendmail_bin}" ]; then

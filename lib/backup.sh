@@ -26,13 +26,35 @@ cmd_backup() {
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --all)          all=1; shift ;;
-      --skip-hooks)   skip_hooks=1; shift ;;
-      --force-unlock) force_unlock=1; shift ;;
-      --tag)          extra_tags+=("$2"); shift 2 ;;
-      --tag=*)        extra_tags+=("${1#*=}"); shift ;;
-      -*)             err "Unknown flag for backup: $1"; usage_backup; exit "${EX_USAGE}" ;;
-      *)              jobs+=("$1"); shift ;;
+      --all)
+        all=1
+        shift
+        ;;
+      --skip-hooks)
+        skip_hooks=1
+        shift
+        ;;
+      --force-unlock)
+        force_unlock=1
+        shift
+        ;;
+      --tag)
+        extra_tags+=("$2")
+        shift 2
+        ;;
+      --tag=*)
+        extra_tags+=("${1#*=}")
+        shift
+        ;;
+      -*)
+        err "Unknown flag for backup: $1"
+        usage_backup
+        exit "${EX_USAGE}"
+        ;;
+      *)
+        jobs+=("$1")
+        shift
+        ;;
     esac
   done
 
@@ -80,7 +102,8 @@ cmd_backup() {
 # One job
 # -----------------------------------------------------------------------------
 backup_run_job() {
-  local job="$1" skip_hooks="$2" force_unlock="$3"; shift 3
+  local job="$1" skip_hooks="$2" force_unlock="$3"
+  shift 3
   local -a extra_tags=("$@")
   local rc=0 start end run_id snapshot="" status="failed"
 
@@ -137,11 +160,14 @@ backup_run_job() {
 
   # 6. The work itself, per mode.
   case "${JOB_MODE}" in
-    files)  backup_mode_files  "${job}" "${run_id}" "${extra_tags[@]:-}" || rc=$? ;;
+    files) backup_mode_files "${job}" "${run_id}" "${extra_tags[@]:-}" || rc=$? ;;
     docker) backup_mode_docker "${job}" "${run_id}" "${extra_tags[@]:-}" || rc=$? ;;
     config) backup_mode_config "${job}" "${run_id}" "${extra_tags[@]:-}" || rc=$? ;;
-    stdin)  backup_mode_stdin  "${job}" "${run_id}" "${extra_tags[@]:-}" || rc=$? ;;
-    *)      err "Unsupported JOB_MODE: ${JOB_MODE}"; rc="${EX_PRECOND}" ;;
+    stdin) backup_mode_stdin "${job}" "${run_id}" "${extra_tags[@]:-}" || rc=$? ;;
+    *)
+      err "Unsupported JOB_MODE: ${JOB_MODE}"
+      rc="${EX_PRECOND}"
+      ;;
   esac
 
   # 7. Reverse the quiesce explicitly (the trap would too; doing it here means
@@ -177,7 +203,7 @@ backup_run_job() {
   # 10. Retention, only after a snapshot actually exists.
   if [ "${JOB_FORGET_AFTER_BACKUP}" = "1" ] && [ -n "${snapshot}" ]; then
     case "${status}" in
-      ok|partial) retention_forget "${job}" 1 || warn "forget failed (backup itself was fine)" ;;
+      ok | partial) retention_forget "${job}" 1 || warn "forget failed (backup itself was fine)" ;;
       *) warn "Skipping forget: this run did not complete cleanly" ;;
     esac
   fi
@@ -186,7 +212,7 @@ backup_run_job() {
   lock_release "job-${job}"
 
   end="$(now_epoch)"
-  log "=== job '${job}' finished: ${status} (rc=${rc}) in $(human_duration $(( end - start ))) ==="
+  log "=== job '${job}' finished: ${status} (rc=${rc}) in $(human_duration $((end - start))) ==="
   return "${rc}"
 }
 
@@ -200,7 +226,8 @@ backup_classify() {
 
 backup_finish() {
   local job="$1" status="$2" rc="$3" run_id="$4" start="$5" snapshot="$6"
-  local end; end="$(now_epoch)"
+  local end
+  end="$(now_epoch)"
 
   state_write "${job}" "${status}" "${rc}" "${run_id}" "${start}" "${end}" "${snapshot}"
   # metrics_write, not metrics_write_job: the latter was never written. Guarded
@@ -211,10 +238,10 @@ backup_finish() {
   metrics_write "${job}" || true
 
   case "${status}" in
-    ok)       monitor_notify success  "${job}" "${rc}" || true ;;
-    partial)  monitor_notify partial  "${job}" "${rc}" || true ;;
+    ok) monitor_notify success "${job}" "${rc}" || true ;;
+    partial) monitor_notify partial "${job}" "${rc}" || true ;;
     degraded) monitor_notify degraded "${job}" "${rc}" || true ;;
-    *)        monitor_notify failure  "${job}" "${rc}" || true ;;
+    *) monitor_notify failure "${job}" "${rc}" || true ;;
   esac
 }
 
@@ -222,7 +249,8 @@ backup_finish() {
 # Modes
 # -----------------------------------------------------------------------------
 backup_mode_files() {
-  local job="$1" run_id="$2"; shift 2
+  local job="$1" run_id="$2"
+  shift 2
   local -a extra_tags=("$@") args=()
   local rc=0 jsonl
 
@@ -253,14 +281,18 @@ backup_mode_files() {
 }
 
 backup_mode_config() {
-  local job="$1" run_id="$2"; shift 2
+  local job="$1" run_id="$2"
+  shift 2
   local -a args=() paths=()
   local rc=0 jsonl p
 
   for p in "${JOB_CONFIG_PATHS[@]:-}"; do
     [ -n "${p}" ] && [ -e "${p}" ] && paths+=("${p}")
   done
-  [ "${#paths[@]}" -gt 0 ] || { warn "Nothing to back up for the config job"; return 0; }
+  [ "${#paths[@]}" -gt 0 ] || {
+    warn "Nothing to back up for the config job"
+    return 0
+  }
 
   args=(backup --host "${BGB_HOSTNAME}" --json)
   mapfile -t -O "${#args[@]}" args < <(restic_tag_args "${job}" "${run_id}" "${JOB_TAGS[@]:-}" "$@")
@@ -291,19 +323,21 @@ backup_config_hash() {
 }
 
 backup_mode_docker() {
-  local job="$1" run_id="$2"; shift 2
+  local job="$1" run_id="$2"
+  shift 2
   lib_source docker.sh
   lib_source db.sh
   docker_backup_run "${job}" "${run_id}" "$@"
 }
 
 backup_mode_stdin() {
-  local job="$1" run_id="$2"; shift 2
+  local job="$1" run_id="$2"
+  shift 2
   [ -n "${JOB_STDIN_COMMAND:-}" ] \
     || die "${EX_PRECOND}" "${job}: JOB_MODE=stdin requires JOB_STDIN_COMMAND"
   local -a args=(backup --host "${BGB_HOSTNAME}" --json
-                 --stdin-from-command
-                 --stdin-filename "${JOB_STDIN_FILENAME:-${job}.dump}")
+    --stdin-from-command
+    --stdin-filename "${JOB_STDIN_FILENAME:-${job}.dump}")
   mapfile -t -O "${#args[@]}" args < <(restic_tag_args "${job}" "${run_id}" "${JOB_TAGS[@]:-}" "$@")
   args+=(--)
   # Deliberately word-split: the operator wrote a command line, not a path.
@@ -385,7 +419,7 @@ backup_run_hooks() {
   local h rc=0
 
   case "${phase}" in
-    pre)  hooks=("${JOB_PRE_HOOKS[@]:-}") ;;
+    pre) hooks=("${JOB_PRE_HOOKS[@]:-}") ;;
     post) hooks=("${JOB_POST_HOOKS[@]:-}") ;;
   esac
 
@@ -432,11 +466,16 @@ backup_run_hooks() {
 backup_job_report_json() {
   local job="$1" rc="$2"
   printf '{'
-  json_kv name "${job}"; printf ','
-  json_kv status "$(backup_classify "${rc}")"; printf ','
-  json_kvraw rc "$(json_num "${rc}")"; printf ','
-  json_kv snapshot_id "$(state_field "${job}" snapshot_id)"; printf ','
-  json_kvraw duration_seconds "$(json_num "$(state_field "${job}" duration_seconds)")"; printf ','
+  json_kv name "${job}"
+  printf ','
+  json_kv status "$(backup_classify "${rc}")"
+  printf ','
+  json_kvraw rc "$(json_num "${rc}")"
+  printf ','
+  json_kv snapshot_id "$(state_field "${job}" snapshot_id)"
+  printf ','
+  json_kvraw duration_seconds "$(json_num "$(state_field "${job}" duration_seconds)")"
+  printf ','
   json_kvraw bytes_added "$(json_num "$(state_field "${job}" bytes_added)")"
   printf '}'
 }

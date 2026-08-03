@@ -22,12 +22,32 @@ _DOC_WARN=0
 _DOC_FAIL=0
 _DOC_JSON=()
 
-_doc_ok()   { _DOC_PASS=$(( _DOC_PASS + 1 )); ok_mark   "$1"; _doc_record ok   "$1" "${2:-}"; }
-_doc_warn() { _DOC_WARN=$(( _DOC_WARN + 1 )); warn_mark "$1"; _doc_record warn "$1" "${2:-}"; }
-_doc_fail() { _DOC_FAIL=$(( _DOC_FAIL + 1 )); bad_mark  "$1"; _doc_record fail "$1" "${2:-}"; }
+_doc_ok() {
+  _DOC_PASS=$((_DOC_PASS + 1))
+  ok_mark "$1"
+  _doc_record ok "$1" "${2:-}"
+}
+_doc_warn() {
+  _DOC_WARN=$((_DOC_WARN + 1))
+  warn_mark "$1"
+  _doc_record warn "$1" "${2:-}"
+}
+_doc_fail() {
+  _DOC_FAIL=$((_DOC_FAIL + 1))
+  bad_mark "$1"
+  _doc_record fail "$1" "${2:-}"
+}
 
 _doc_record() {
-  _DOC_JSON+=("$(printf '{'; json_kv status "$1"; printf ','; json_kv check "$2"; printf ','; json_kv detail "${3:-}"; printf '}')")
+  _DOC_JSON+=("$(
+    printf '{'
+    json_kv status "$1"
+    printf ','
+    json_kv check "$2"
+    printf ','
+    json_kv detail "${3:-}"
+    printf '}'
+  )")
 }
 
 _doc_section() { printf '\n%s%s%s\n' "${C_BOLD}" "$1" "${C_RESET}" >&2; }
@@ -36,8 +56,15 @@ cmd_doctor() {
   local fix=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --fix) fix=1; shift ;;
-      -*) err "Unknown flag for doctor: $1"; usage_doctor; exit "${EX_USAGE}" ;;
+      --fix)
+        fix=1
+        shift
+        ;;
+      -*)
+        err "Unknown flag for doctor: $1"
+        usage_doctor
+        exit "${EX_USAGE}"
+        ;;
       *) shift ;;
     esac
   done
@@ -79,7 +106,7 @@ doctor_check_environment() {
     _doc_ok "jq $(jq --version 2>/dev/null | sed 's/jq-//')"
   else
     _doc_fail "jq is missing - JSON output, discovery and Docker mode are unavailable" \
-              "apt-get install -y jq"
+      "apt-get install -y jq"
   fi
 
   local c
@@ -118,12 +145,13 @@ doctor_check_installation() {
   _doc_section "Installation"
 
   if [ -x "${BGB_RESTIC_BIN}" ]; then
-    local v; v="$(restic_version)"
+    local v
+    v="$(restic_version)"
     if version_ge "${v}" "${BGB_RESTIC_MIN_VERSION}"; then
       _doc_ok "restic ${v} at ${BGB_RESTIC_BIN}"
     else
       _doc_fail "restic ${v} is older than the required ${BGB_RESTIC_MIN_VERSION}" \
-                "distribution packages are too old (22.04 ships 0.12.1, 24.04 ships 0.16.4)"
+        "distribution packages are too old (22.04 ships 0.12.1, 24.04 ships 0.16.4)"
     fi
   else
     _doc_fail "restic not found at ${BGB_RESTIC_BIN}"
@@ -154,9 +182,9 @@ doctor_check_installation() {
     local avail_kb
     avail_kb="$(df -Pk "${BGB_CACHE_DIR}" 2>/dev/null | awk 'NR==2{print $4}')"
     if [ -n "${avail_kb}" ] && [ "${avail_kb}" -lt 1048576 ]; then
-      _doc_warn "less than 1 GiB free on the cache filesystem ($(human_bytes $(( avail_kb * 1024 ))))"
+      _doc_warn "less than 1 GiB free on the cache filesystem ($(human_bytes $((avail_kb * 1024))))"
     else
-      _doc_ok "cache filesystem has $(human_bytes $(( ${avail_kb:-0} * 1024 ))) free"
+      _doc_ok "cache filesystem has $(human_bytes $((${avail_kb:-0} * 1024))) free"
     fi
   fi
 }
@@ -167,7 +195,7 @@ doctor_check_configuration() {
 
   local main="${BGB_CONFIG_FILE:-${BGB_CONFDIR}/bg-backup.conf}"
   if [ -f "${main}" ]; then
-    if ( config_require_perms "${main}" 0640 ) >/dev/null 2>&1; then
+    if (config_require_perms "${main}" 0640) >/dev/null 2>&1; then
       _doc_ok "main configuration permissions"
     else
       if [ "${fix}" = "1" ]; then
@@ -176,7 +204,7 @@ doctor_check_configuration() {
         _doc_fail "${main} is world/group readable or not owned by root" "chmod 0640 ${main}"
       fi
     fi
-    if ( config_lint "${main}" ) >/dev/null 2>&1; then
+    if (config_lint "${main}") >/dev/null 2>&1; then
       _doc_ok "main configuration syntax"
     else
       _doc_fail "main configuration does not validate" "run: bg-backup config validate"
@@ -189,28 +217,32 @@ doctor_check_configuration() {
   for cred in repo.env repo.key notify.env; do
     f="${BGB_CONFDIR}/credentials/${cred}"
     [ -e "${f}" ] || continue
-    local mode; mode="$(stat -c '%a' "${f}" 2>/dev/null)"
+    local mode
+    mode="$(stat -c '%a' "${f}" 2>/dev/null)"
     case "${cred}" in
       repo.key) [ "${mode}" = "400" ] && _doc_ok "${cred} mode ${mode}" || {
-                  [ "${fix}" = "1" ] && chmod 0400 "${f}" && _doc_ok "fixed ${cred} to 0400" \
-                  || _doc_fail "${cred} has mode ${mode}, expected 400" "chmod 0400 ${f}"; } ;;
-      *)        case "${mode}" in
-                  400|600) _doc_ok "${cred} mode ${mode}" ;;
-                  *) [ "${fix}" = "1" ] && chmod 0400 "${f}" && _doc_ok "fixed ${cred} to 0400" \
-                     || _doc_fail "${cred} has mode ${mode}, expected 400 or 600" "chmod 0400 ${f}" ;;
-                esac ;;
+        [ "${fix}" = "1" ] && chmod 0400 "${f}" && _doc_ok "fixed ${cred} to 0400" \
+          || _doc_fail "${cred} has mode ${mode}, expected 400" "chmod 0400 ${f}"
+      } ;;
+      *) case "${mode}" in
+        400 | 600) _doc_ok "${cred} mode ${mode}" ;;
+        *) [ "${fix}" = "1" ] && chmod 0400 "${f}" && _doc_ok "fixed ${cred} to 0400" \
+          || _doc_fail "${cred} has mode ${mode}, expected 400 or 600" "chmod 0400 ${f}" ;;
+      esac ;;
     esac
   done
 
   local d="${BGB_CONFDIR}/credentials"
   if [ -d "${d}" ]; then
-    local dmode; dmode="$(stat -c '%a' "${d}" 2>/dev/null)"
+    local dmode
+    dmode="$(stat -c '%a' "${d}" 2>/dev/null)"
     [ "${dmode}" = "700" ] && _doc_ok "credentials directory mode 700" \
       || { [ "${fix}" = "1" ] && chmod 0700 "${d}" && _doc_ok "fixed credentials directory to 0700" \
-           || _doc_warn "credentials directory has mode ${dmode}, expected 700"; }
+        || _doc_warn "credentials directory has mode ${dmode}, expected 700"; }
   fi
 
-  local n; n="$(config_list_jobs | grep -c '^' || true)"
+  local n
+  n="$(config_list_jobs | grep -c '^' || true)"
   if [ "${n:-0}" -gt 0 ]; then
     _doc_ok "${n} job(s) defined"
   else
@@ -226,7 +258,7 @@ doctor_check_repository() {
     return 0
   fi
 
-  if ! ( repo_env_load ) >/dev/null 2>&1; then
+  if ! (repo_env_load) >/dev/null 2>&1; then
     _doc_fail "the repository environment does not load" "run: bg-backup config validate"
     return 0
   fi
@@ -234,13 +266,15 @@ doctor_check_repository() {
 
   # THE shared-bucket check. Getting the prefix wrong is how one host's
   # retention silently deletes another host's snapshots.
-  local prefix; prefix="$(repo_prefix)"
-  local host; host="$(fqdn)"
+  local prefix
+  prefix="$(repo_prefix)"
+  local host
+  host="$(fqdn)"
   if [ "${prefix}" = "${host}" ]; then
     _doc_ok "repository prefix matches this host (${prefix})"
   else
     _doc_fail "repository prefix is '${prefix}' but this host is '${host}'" \
-              "In a shared bucket this is how one host's forget deletes another host's snapshots."
+      "In a shared bucket this is how one host's forget deletes another host's snapshots."
   fi
 
   if restic_repo_reachable; then
@@ -252,7 +286,7 @@ doctor_check_repository() {
 
   if restic_is_locked; then
     _doc_warn "the repository currently holds a lock (a run in progress, or a stale lock)" \
-              "check with: bg-backup unlock"
+      "check with: bg-backup unlock"
   else
     _doc_ok "no repository lock held"
   fi
@@ -271,19 +305,21 @@ doctor_check_repository() {
     _doc_ok "repository role: ${BGB_REPO_ROLE} (prune is disabled here, by design)"
   fi
 
-  local last_check; last_check="$(state_get_repo check_at)"
+  local last_check
+  last_check="$(state_get_repo check_at)"
   if [ -n "${last_check}" ]; then
     _doc_ok "last integrity check: ${last_check}"
   else
     _doc_warn "no 'restic check' has been recorded yet"
   fi
 
-  local last_verify; last_verify="$(state_get_repo verify_at)"
+  local last_verify
+  last_verify="$(state_get_repo verify_at)"
   if [ -n "${last_verify}" ]; then
     _doc_ok "last proven restore: ${last_verify}"
   else
     _doc_warn "no restore has ever been verified" \
-              "A backup that has never been restored is a hypothesis. Run: bg-backup verify"
+      "A backup that has never been restored is a hypothesis. Run: bg-backup verify"
   fi
 }
 
@@ -293,7 +329,7 @@ doctor_check_jobs() {
 
   while IFS= read -r job; do
     [ -n "${job}" ] || continue
-    if ! ( config_load_job "${job}" ) >/dev/null 2>&1; then
+    if ! (config_load_job "${job}") >/dev/null 2>&1; then
       _doc_fail "job '${job}' does not validate" "run: bg-backup config validate"
       continue
     fi
@@ -329,9 +365,9 @@ doctor_check_schedules() {
     [ -n "${job}" ] || continue
     unit="bg-backup@${job}.timer"
     if systemctl list-unit-files "${unit}" >/dev/null 2>&1 \
-       && systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
+      && systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
       _doc_ok "timer ${unit}: $(systemctl show -p NextElapseUSecRealtime --value "${unit}" 2>/dev/null || echo enabled)"
-      n=$(( n + 1 ))
+      n=$((n + 1))
     else
       _doc_warn "timer ${unit} is not enabled"
     fi
@@ -349,25 +385,29 @@ doctor_check_schedule_collisions() {
   local job
   while IFS= read -r job; do
     [ -n "${job}" ] || continue
-    ( config_load_job "${job}" ) >/dev/null 2>&1 || continue
+    (config_load_job "${job}") >/dev/null 2>&1 || continue
     config_load_job "${job}" >/dev/null 2>&1 || true
     case "${JOB_QUIESCE}" in
-      docker-stop|docker-pause|service-stop)
-        [ -n "${JOB_SCHEDULE}" ] && quiescing+=("${job}|${JOB_SCHEDULE}") ;;
+      docker-stop | docker-pause | service-stop)
+        [ -n "${JOB_SCHEDULE}" ] && quiescing+=("${job}|${JOB_SCHEDULE}")
+        ;;
     esac
   done < <(config_list_jobs)
 
   [ "${#quiescing[@]}" -lt 2 ] && return 0
 
   local i j a b an bn as bs
-  for (( i=0; i<${#quiescing[@]}; i++ )); do
-    for (( j=i+1; j<${#quiescing[@]}; j++ )); do
-      a="${quiescing[i]}"; b="${quiescing[j]}"
-      an="${a%%|*}"; as="${a#*|}"
-      bn="${b%%|*}"; bs="${b#*|}"
+  for ((i = 0; i < ${#quiescing[@]}; i++)); do
+    for ((j = i + 1; j < ${#quiescing[@]}; j++)); do
+      a="${quiescing[i]}"
+      b="${quiescing[j]}"
+      an="${a%%|*}"
+      as="${a#*|}"
+      bn="${b%%|*}"
+      bs="${b#*|}"
       if [ "${as}" = "${bs}" ]; then
         _doc_fail "jobs '${an}' and '${bn}' both quiesce services at the same time (${as})" \
-                  "They will fight over the same containers. Move them apart."
+          "They will fight over the same containers. Move them apart."
       fi
     done
   done
@@ -391,9 +431,12 @@ doctor_check_docker() {
     local covered=0 job p
     while IFS= read -r job; do
       [ -n "${job}" ] || continue
-      ( config_load_job "${job}" ) >/dev/null 2>&1 || continue
+      (config_load_job "${job}") >/dev/null 2>&1 || continue
       config_load_job "${job}" >/dev/null 2>&1 || true
-      [ "${JOB_ONE_FILE_SYSTEM}" = "1" ] || { covered=1; break; }
+      [ "${JOB_ONE_FILE_SYSTEM}" = "1" ] || {
+        covered=1
+        break
+      }
       for p in "${JOB_PATHS[@]:-}" "${JOB_EXTRA_PATHS[@]:-}"; do
         case "${p}" in /var/lib/docker*) covered=1 ;; esac
       done
@@ -404,7 +447,7 @@ doctor_check_docker() {
       _doc_ok "/var/lib/docker is a separate mount and is covered"
     else
       _doc_fail "/var/lib/docker is on its own filesystem (${docker_dev}) and --one-file-system will SKIP it" \
-                "Add /var/lib/docker to JOB_EXTRA_PATHS, or use a docker-mode job."
+        "Add /var/lib/docker to JOB_EXTRA_PATHS, or use a docker-mode job."
     fi
   else
     _doc_ok "/var/lib/docker is on the root filesystem"
@@ -422,14 +465,14 @@ doctor_check_docker() {
       tag="$(docker inspect "${c}" 2>/dev/null | jq -r '.[0].Config.Image // empty')"
       [ -n "${tag}" ] || continue
       docker image inspect "${tag}" 2>/dev/null | jq -e '.[0].RepoDigests[0]' >/dev/null 2>&1 \
-        || missing=$(( missing + 1 ))
+        || missing=$((missing + 1))
     done < <(docker ps -q 2>/dev/null || true)
 
     if [ "${missing}" -eq 0 ]; then
       _doc_ok "every running image has a registry digest"
     else
       _doc_warn "${missing} running container(s) use a locally built image with no registry digest" \
-                "Set JOB_DOCKER_EXPORT_IMAGES=missing, or they are not restorable."
+        "Set JOB_DOCKER_EXPORT_IMAGES=missing, or they are not restorable."
     fi
   fi
 }
@@ -441,18 +484,18 @@ doctor_check_recovery() {
     _doc_ok "recovery card acknowledged ($(awk -F= '/acknowledged/{print $2}' "${BGB_STATE_DIR}/card-ack" 2>/dev/null))"
   else
     _doc_warn "the recovery card has not been acknowledged" \
-              "If the passphrase exists only on this host, a total loss is unrecoverable."
+      "If the passphrase exists only on this host, a total loss is unrecoverable."
   fi
 
   local bundle="${BGB_ESCROW_LOCAL}"
   if [ -f "${bundle}" ]; then
     local age_days
-    age_days=$(( ( $(now_epoch) - $(stat -c %Y "${bundle}") ) / 86400 ))
+    age_days=$((($(now_epoch) - $(stat -c %Y "${bundle}")) / 86400))
     if [ "${age_days}" -le "${BGB_ESCROW_MAX_AGE_DAYS}" ]; then
       _doc_ok "recovery bundle is ${age_days} day(s) old"
     else
       _doc_warn "recovery bundle is ${age_days} days old (limit ${BGB_ESCROW_MAX_AGE_DAYS})" \
-                "run: bg-backup config export"
+        "run: bg-backup config export"
     fi
   else
     _doc_warn "no local recovery bundle" "run: bg-backup config export --out ${bundle}"
@@ -468,7 +511,7 @@ doctor_check_recovery() {
       _doc_ok "the recovery bundle matches the deployed configuration"
     else
       _doc_warn "the configuration has changed since the last export" \
-                "run: bg-backup config export"
+        "run: bg-backup config export"
     fi
   fi
 
@@ -478,7 +521,7 @@ doctor_check_recovery() {
     _doc_ok "an independent recovery key exists"
   else
     _doc_warn "no independent recovery key" \
-              "Without one, a host compromise means rebuilding the repository rather than removing a key."
+      "Without one, a host compromise means rebuilding the repository rather than removing a key."
   fi
 }
 
@@ -488,19 +531,29 @@ doctor_check_monitoring() {
   local any=0 n
   for n in ${BGB_NOTIFIERS}; do
     case "${n}" in
-      uptime-kuma) [ -n "${BGB_MONITOR_KUMA_PUSH_URL}" ] && { _doc_ok "uptime-kuma configured"; any=1; } \
-                     || _doc_warn "uptime-kuma listed but BGB_MONITOR_KUMA_PUSH_URL is empty" ;;
-      email)       [ -n "${BGB_MONITOR_MAIL_TO}" ] && { _doc_ok "email to ${BGB_MONITOR_MAIL_TO}"; any=1; } \
-                     || _doc_warn "email listed but BGB_MONITOR_MAIL_TO is empty" ;;
-      teams)       [ -n "${BGB_MONITOR_TEAMS_WEBHOOK_URL}" ] && { _doc_ok "Teams webhook configured"; any=1; } \
-                     || _doc_warn "teams listed but no webhook URL" ;;
-      prometheus)  [ -n "${BGB_METRICS_TEXTFILE}" ] && {
-                     if [ -d "$(dirname "${BGB_METRICS_TEXTFILE}")" ]; then
-                       _doc_ok "prometheus textfile: ${BGB_METRICS_TEXTFILE}"; any=1
-                     else
-                       _doc_warn "textfile collector directory does not exist: $(dirname "${BGB_METRICS_TEXTFILE}")"
-                     fi
-                   } || _doc_warn "prometheus listed but BGB_METRICS_TEXTFILE is empty" ;;
+      uptime-kuma) [ -n "${BGB_MONITOR_KUMA_PUSH_URL}" ] && {
+        _doc_ok "uptime-kuma configured"
+        any=1
+      } \
+        || _doc_warn "uptime-kuma listed but BGB_MONITOR_KUMA_PUSH_URL is empty" ;;
+      email) [ -n "${BGB_MONITOR_MAIL_TO}" ] && {
+        _doc_ok "email to ${BGB_MONITOR_MAIL_TO}"
+        any=1
+      } \
+        || _doc_warn "email listed but BGB_MONITOR_MAIL_TO is empty" ;;
+      teams) [ -n "${BGB_MONITOR_TEAMS_WEBHOOK_URL}" ] && {
+        _doc_ok "Teams webhook configured"
+        any=1
+      } \
+        || _doc_warn "teams listed but no webhook URL" ;;
+      prometheus) [ -n "${BGB_METRICS_TEXTFILE}" ] && {
+        if [ -d "$(dirname "${BGB_METRICS_TEXTFILE}")" ]; then
+          _doc_ok "prometheus textfile: ${BGB_METRICS_TEXTFILE}"
+          any=1
+        else
+          _doc_warn "textfile collector directory does not exist: $(dirname "${BGB_METRICS_TEXTFILE}")"
+        fi
+      } || _doc_warn "prometheus listed but BGB_METRICS_TEXTFILE is empty" ;;
     esac
   done
 
@@ -528,7 +581,8 @@ doctor_summary() {
     for c in "${_DOC_JSON[@]:-}"; do
       [ -n "${c}" ] || continue
       [ "${first}" -eq 0 ] && body+=","
-      body+="${c}"; first=0
+      body+="${c}"
+      first=0
     done
     body+="],"
     body+="$(json_kvraw pass "${_DOC_PASS}"),"

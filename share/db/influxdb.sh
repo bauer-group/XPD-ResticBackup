@@ -38,7 +38,7 @@ db_influxdb_detect() {
 
   # Telegraf ships in the same family and is not a database.
   case "${image}" in
-    *telegraf*|*chronograf*|*kapacitor*|*exporter*) return 1 ;;
+    *telegraf* | *chronograf* | *kapacitor* | *exporter*) return 1 ;;
   esac
   case "${image}" in *influx*) : ;; *) return 1 ;; esac
 
@@ -55,18 +55,27 @@ db_influxdb_major() {
   # `influx version` speaks for the client, `influxd version` for the server.
   v="$(docker exec "${c}" sh -c 'influxd version 2>/dev/null || influx version 2>/dev/null' 2>/dev/null | head -n1)"
   case "${v}" in
-    *' 1.'*|*'v1.'*) printf '1' ; return 0 ;;
-    *' 2.'*|*'v2.'*) printf '2' ; return 0 ;;
-    *' 3.'*|*'v3.'*) printf '3' ; return 0 ;;
+    *' 1.'* | *'v1.'*)
+      printf '1'
+      return 0
+      ;;
+    *' 2.'* | *'v2.'*)
+      printf '2'
+      return 0
+      ;;
+    *' 3.'* | *'v3.'*)
+      printf '3'
+      return 0
+      ;;
   esac
   # Fall back to the image tag, which is right often enough to be useful and is
   # reported to the operator either way.
   local image
   image="$(docker inspect --format '{{.Config.Image}}' "${c}" 2>/dev/null || true)"
   case "${image}" in
-    *:1*|*1.[0-9]*) printf '1' ;;
-    *:2*|*2.[0-9]*) printf '2' ;;
-    *:3*|*3.[0-9]*) printf '3' ;;
+    *:1* | *1.[0-9]*) printf '1' ;;
+    *:2* | *2.[0-9]*) printf '2' ;;
+    *:3* | *3.[0-9]*) printf '3' ;;
     *) printf '' ;;
   esac
 }
@@ -75,7 +84,8 @@ db_influxdb_major() {
 # Dump
 # -----------------------------------------------------------------------------
 _db_influxdb_run() {
-  local job="$1" run="$2" name="$3" tag="$4"; shift 4
+  local job="$1" run="$2" name="$3" tag="$4"
+  shift 4
   [ "${1:-}" = "--" ] && shift
 
   local log rc=0
@@ -94,12 +104,12 @@ _db_influxdb_run() {
   )
   argv+=(timeout "${JOB_DB_DUMP_TIMEOUT:-3600}" "$@")
 
-  BGB_RUN_DB_DUMPS=$(( ${BGB_RUN_DB_DUMPS:-0} + 1 ))
+  BGB_RUN_DB_DUMPS=$((${BGB_RUN_DB_DUMPS:-0} + 1))
   restic_exec_logged "${log}" "${argv[@]}" || rc=$?
   BGB_DB_LAST_LOG="${log}"
 
   if [ "${rc}" -ne 0 ]; then
-    BGB_RUN_DB_DUMPS_FAILED=$(( ${BGB_RUN_DB_DUMPS_FAILED:-0} + 1 ))
+    BGB_RUN_DB_DUMPS_FAILED=$((${BGB_RUN_DB_DUMPS_FAILED:-0} + 1))
     err "influxdb: ${name} failed (restic rc=${rc}: $(restic_explain_rc "${rc}"))"
     return "${EX_FAIL}"
   fi
@@ -152,17 +162,19 @@ db_influxdb_dump() {
     1)
       _db_influxdb_run "${job}" "${run}" "/db/influxdb/${c}/backup-v1.tar" "influx_major=1" \
         -- docker exec -i "${c}" sh -c "${_DB_INFLUX_V1_SH}" || {
-          BGB_DB_RESULT="failed"
-          BGB_DB_RESULT_REASON="influxd backup -portable failed"
-          return "${EX_FAIL}"
-        } ;;
+        BGB_DB_RESULT="failed"
+        BGB_DB_RESULT_REASON="influxd backup -portable failed"
+        return "${EX_FAIL}"
+      }
+      ;;
     2)
       _db_influxdb_run "${job}" "${run}" "/db/influxdb/${c}/backup-v2.tar" "influx_major=2" \
         -- docker exec -i "${c}" sh -c "${_DB_INFLUX_V2_SH}" || {
-          BGB_DB_RESULT="failed"
-          BGB_DB_RESULT_REASON="influx backup failed (is the admin token available in the container?)"
-          return "${EX_FAIL}"
-        } ;;
+        BGB_DB_RESULT="failed"
+        BGB_DB_RESULT_REASON="influx backup failed (is the admin token available in the container?)"
+        return "${EX_FAIL}"
+      }
+      ;;
     3)
       # Deliberate refusal. InfluxDB 3 stores Parquet in object storage and has
       # no logical dump; the correct backup is a snapshot of that object store,
@@ -172,12 +184,14 @@ db_influxdb_dump() {
       err "  Set the label ${BGB_DB_LABEL_NS}/skip=true once that is arranged."
       BGB_DB_RESULT="failed"
       BGB_DB_RESULT_REASON="InfluxDB 3.x has no logical dump - back up the object store instead"
-      return "${EX_FAIL}" ;;
+      return "${EX_FAIL}"
+      ;;
     *)
       err "influxdb: could not determine the major version of ${c}"
       BGB_DB_RESULT="failed"
       BGB_DB_RESULT_REASON="version detection failed"
-      return "${EX_FAIL}" ;;
+      return "${EX_FAIL}"
+      ;;
   esac
   return "${EX_OK}"
 }
@@ -203,12 +217,14 @@ db_influxdb_counts() {
         first=0
         printf '%s:1' "$(json_str "${db}")"
       done <<<"${out}"
-      printf '}' ;;
+      printf '}'
+      ;;
     2)
       out="$(docker exec -i "${c}" sh -c \
         'influx bucket list --hide-headers 2>/dev/null | wc -l' 2>/dev/null || true)"
       [ -n "${out}" ] || return 0
-      printf '{"buckets":%s}' "$(json_num "${out}")" ;;
+      printf '{"buckets":%s}' "$(json_num "${out}")"
+      ;;
     *) return 0 ;;
   esac
 }
@@ -220,15 +236,16 @@ db_influxdb_counts() {
 db_influxdb_restore() {
   local c="$1"
   require_cmd docker
-  local major; major="$(db_influxdb_major "${c}")"
+  local major
+  major="$(db_influxdb_major "${c}")"
   case "${major}" in
-    1)  docker exec -i "${c}" sh -c '
+    1) docker exec -i "${c}" sh -c '
           set -e
           d=$(mktemp -d); trap "rm -rf \"$d\"" EXIT
           tar -C "$d" -xf -
           influxd restore -portable "$d"
         ' ;;
-    2)  docker exec -i "${c}" sh -c '
+    2) docker exec -i "${c}" sh -c '
           set -e
           d=$(mktemp -d); trap "rm -rf \"$d\"" EXIT
           tar -C "$d" -xf -
@@ -236,8 +253,10 @@ db_influxdb_restore() {
           if [ -n "$token" ]; then influx restore "$d" --full --token "$token"
           else influx restore "$d" --full; fi
         ' ;;
-    *)  err "influxdb: cannot restore into major version '${major:-unknown}'"
-        return "${EX_PRECOND}" ;;
+    *)
+      err "influxdb: cannot restore into major version '${major:-unknown}'"
+      return "${EX_PRECOND}"
+      ;;
   esac
 }
 

@@ -29,13 +29,17 @@ readonly BGB_BUNDLE_SCHEMA=1
 # Command dispatch
 # -----------------------------------------------------------------------------
 cmd_secrets() {
-  local sub="${1:-show}"; shift || true
+  local sub="${1:-show}"
+  shift || true
   case "${sub}" in
-    show)                  secrets_cmd_show "$@" ;;
-    rotate-repo-password)  secrets_cmd_rotate "$@" ;;
-    print-recovery-card)   secrets_cmd_card "$@" ;;
-    add-recovery-key)      secrets_cmd_add_recovery_key "$@" ;;
-    *) err "Unknown subcommand: secrets ${sub}"; exit "${EX_USAGE}" ;;
+    show) secrets_cmd_show "$@" ;;
+    rotate-repo-password) secrets_cmd_rotate "$@" ;;
+    print-recovery-card) secrets_cmd_card "$@" ;;
+    add-recovery-key) secrets_cmd_add_recovery_key "$@" ;;
+    *)
+      err "Unknown subcommand: secrets ${sub}"
+      exit "${EX_USAGE}"
+      ;;
   esac
 }
 
@@ -50,11 +54,26 @@ secrets_cmd_export() {
   local out="" passphrase_file="" recipients_file="${BGB_ESCROW_RECIPIENTS_FILE}" plain=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --out) out="$2"; shift 2 ;;
-      --out=*) out="${1#*=}"; shift ;;
-      --passphrase-file) passphrase_file="$2"; shift 2 ;;
-      --recipients-file) recipients_file="$2"; shift 2 ;;
-      --plain) plain=1; shift ;;
+      --out)
+        out="$2"
+        shift 2
+        ;;
+      --out=*)
+        out="${1#*=}"
+        shift
+        ;;
+      --passphrase-file)
+        passphrase_file="$2"
+        shift 2
+        ;;
+      --recipients-file)
+        recipients_file="$2"
+        shift 2
+        ;;
+      --plain)
+        plain=1
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -64,7 +83,8 @@ secrets_cmd_export() {
   [ -z "${out}" ] && out="${BGB_ESCROW_LOCAL}"
   install -d -m 0700 "$(dirname "${out}")"
 
-  local work; work="$(tmp_root)/bundle"
+  local work
+  work="$(tmp_root)/bundle"
   install -d -m 0700 "${work}"
 
   log "Collecting the recovery bundle"
@@ -74,11 +94,12 @@ secrets_cmd_export() {
   # produces the same SHA-256 and "did the bundle change?" is answerable.
   local tarball="${work}.tar"
   tar --sort=name --mtime='2000-01-01 00:00:00Z' \
-      --owner=0 --group=0 --numeric-owner \
-      -C "${work}" -cf "${tarball}" . 2>/dev/null
+    --owner=0 --group=0 --numeric-owner \
+    -C "${work}" -cf "${tarball}" . 2>/dev/null
   chmod 0600 "${tarball}"
 
-  local sha; sha="$(sha256sum "${tarball}" | awk '{print $1}')"
+  local sha
+  sha="$(sha256sum "${tarball}" | awk '{print $1}')"
   log "Bundle content SHA-256: ${sha}"
 
   if [ "${plain}" = "1" ]; then
@@ -95,9 +116,9 @@ secrets_cmd_export() {
   redact_register "${passphrase}"
 
   local produced=0
-  secrets_encrypt_age     "${tarball}" "${out}"           "${passphrase}" "${recipients_file}" && produced=$(( produced + 1 ))
-  secrets_encrypt_gpg     "${tarball}" "${out%.age}.gpg"  "${passphrase}" && produced=$(( produced + 1 ))
-  secrets_encrypt_openssl "${tarball}" "${out%.age}.enc"  "${passphrase}" && produced=$(( produced + 1 ))
+  secrets_encrypt_age "${tarball}" "${out}" "${passphrase}" "${recipients_file}" && produced=$((produced + 1))
+  secrets_encrypt_gpg "${tarball}" "${out%.age}.gpg" "${passphrase}" && produced=$((produced + 1))
+  secrets_encrypt_openssl "${tarball}" "${out%.age}.enc" "${passphrase}" && produced=$((produced + 1))
 
   [ "${produced}" -gt 0 ] || die "${EX_FAIL}" "No encryption tool available (need age, gpg or openssl)"
   log "Produced ${produced} independently encrypted copies"
@@ -121,7 +142,7 @@ secrets_collect() {
 
   # Configuration and credentials, verbatim.
   tar -C "$(dirname "${BGB_CONFDIR}")" -cf "${work}/config/etc-bg-backup.tar" \
-      "$(basename "${BGB_CONFDIR}")" 2>/dev/null
+    "$(basename "${BGB_CONFDIR}")" 2>/dev/null
   chmod 0600 "${work}/config/etc-bg-backup.tar"
 
   # System facts, so `dr plan` works before anything has been restored.
@@ -147,7 +168,7 @@ secrets_collect() {
   # Repository identity, so a recovering operator can prove they reached the
   # right repository before typing a passphrase into it.
   local repo_id=""
-  if ( repo_env_load ) >/dev/null 2>&1; then
+  if (repo_env_load) >/dev/null 2>&1; then
     repo_env_load >/dev/null 2>&1 || true
     repo_id="$(restic_repo_id 2>/dev/null || true)"
     restic_capture key list --json >"${work}/keys/restic-keys.json" 2>/dev/null || true
@@ -155,13 +176,20 @@ secrets_collect() {
 
   {
     printf '{'
-    json_kvraw schema "${BGB_BUNDLE_SCHEMA}"; printf ','
-    json_kv host "$(fqdn)"; printf ','
-    json_kv created "$(now_iso)"; printf ','
-    json_kv tool_version "${BGB_VERSION}"; printf ','
-    json_kv restic_version "$(restic_version 2>/dev/null || echo unknown)"; printf ','
-    json_kv repository "${RESTIC_REPOSITORY:-}"; printf ','
-    json_kv repository_id "${repo_id}"; printf ','
+    json_kvraw schema "${BGB_BUNDLE_SCHEMA}"
+    printf ','
+    json_kv host "$(fqdn)"
+    printf ','
+    json_kv created "$(now_iso)"
+    printf ','
+    json_kv tool_version "${BGB_VERSION}"
+    printf ','
+    json_kv restic_version "$(restic_version 2>/dev/null || echo unknown)"
+    printf ','
+    json_kv repository "${RESTIC_REPOSITORY:-}"
+    printf ','
+    json_kv repository_id "${repo_id}"
+    printf ','
     json_kv config_tag "bg-backup-config"
     printf '}\n'
   } >"${work}/bundle.json"
@@ -224,30 +252,46 @@ secrets_get_escrow_passphrase() {
   local file="$1"
   if [ -n "${file}" ]; then
     [ -r "${file}" ] || die "${EX_PRECOND}" "Cannot read ${file}"
-    cat "${file}"; return 0
+    cat "${file}"
+    return 0
   fi
   if [ -n "${BGB_ESCROW_PASSPHRASE:-}" ]; then
-    printf '%s' "${BGB_ESCROW_PASSPHRASE}"; return 0
+    printf '%s' "${BGB_ESCROW_PASSPHRASE}"
+    return 0
   fi
   local keyf="${BGB_CONFDIR}/credentials/escrow.key"
   if [ -r "${keyf}" ]; then
-    cat "${keyf}"; return 0
+    cat "${keyf}"
+    return 0
   fi
   if [ -t 0 ]; then
     local a b
     printf 'Bundle passphrase (this is what opens the recovery bundle): ' >&2
-    stty -echo 2>/dev/null || true; read -r a; stty echo 2>/dev/null || true; printf '\n' >&2
+    stty -echo 2>/dev/null || true
+    read -r a
+    stty echo 2>/dev/null || true
+    printf '\n' >&2
     printf 'Repeat: ' >&2
-    stty -echo 2>/dev/null || true; read -r b; stty echo 2>/dev/null || true; printf '\n' >&2
-    [ "${a}" = "${b}" ] || { err "Passphrases do not match"; return 1; }
-    printf '%s' "${a}"; return 0
+    stty -echo 2>/dev/null || true
+    read -r b
+    stty echo 2>/dev/null || true
+    printf '\n' >&2
+    [ "${a}" = "${b}" ] || {
+      err "Passphrases do not match"
+      return 1
+    }
+    printf '%s' "${a}"
+    return 0
   fi
   return 1
 }
 
 secrets_encrypt_age() {
   local src="$1" out="$2" passphrase="$3" recipients="$4"
-  have age || { debug "age not installed - skipping the age copy"; return 1; }
+  have age || {
+    debug "age not installed - skipping the age copy"
+    return 1
+  }
 
   if [ -r "${recipients}" ] && [ -s "${recipients}" ]; then
     age -R "${recipients}" -o "${out}" "${src}" || return 1
@@ -266,7 +310,8 @@ secrets_encrypt_age() {
 
 secrets_roundtrip_age() {
   local enc="$1" orig="$2" passphrase="$3" recipients="$4"
-  local dec; dec="$(tmp_file "rt.XXXXXX")"
+  local dec
+  dec="$(tmp_file "rt.XXXXXX")"
   local ok=1
   if [ -r "${recipients}" ] && [ -s "${recipients}" ]; then
     # Recipient mode cannot be verified without a private key; the SHA of the
@@ -277,7 +322,8 @@ secrets_roundtrip_age() {
   printf '%s' "${passphrase}" | age -d -o "${dec}" "${enc}" 2>/dev/null || ok=0
   if [ "${ok}" = "1" ] && cmp -s "${dec}" "${orig}"; then
     log "age round trip verified"
-    rm -f "${dec}"; return 0
+    rm -f "${dec}"
+    return 0
   fi
   rm -f "${dec}"
   err "age round trip FAILED - the encrypted bundle does not decrypt to the original"
@@ -286,18 +332,23 @@ secrets_roundtrip_age() {
 
 secrets_encrypt_gpg() {
   local src="$1" out="$2" passphrase="$3"
-  have gpg || { debug "gpg not installed - skipping the gpg copy"; return 1; }
+  have gpg || {
+    debug "gpg not installed - skipping the gpg copy"
+    return 1
+  }
   printf '%s' "${passphrase}" | gpg --batch --yes --quiet \
     --symmetric --cipher-algo AES256 \
     --s2k-mode 3 --s2k-count 65011712 --s2k-digest-algo SHA512 \
     --passphrase-fd 0 -o "${out}" "${src}" 2>/dev/null || return 1
   chmod 0600 "${out}"
 
-  local dec; dec="$(tmp_file "rtg.XXXXXX")"
+  local dec
+  dec="$(tmp_file "rtg.XXXXXX")"
   if printf '%s' "${passphrase}" | gpg --batch --yes --quiet --passphrase-fd 0 \
-       -o "${dec}" -d "${out}" 2>/dev/null && cmp -s "${dec}" "${src}"; then
+    -o "${dec}" -d "${out}" 2>/dev/null && cmp -s "${dec}" "${src}"; then
     log "gpg: ${out} (round trip verified)"
-    rm -f "${dec}"; return 0
+    rm -f "${dec}"
+    return 0
   fi
   rm -f "${dec}"
   err "gpg round trip FAILED"
@@ -306,7 +357,10 @@ secrets_encrypt_gpg() {
 
 secrets_encrypt_openssl() {
   local src="$1" out="$2" passphrase="$3"
-  have openssl || { debug "openssl not installed"; return 1; }
+  have openssl || {
+    debug "openssl not installed"
+    return 1
+  }
   # AES-256-CTR with PBKDF2. NOTE: `openssl enc` provides NO integrity
   # protection - it cannot detect tampering. That is why the ciphertext SHA-256
   # goes onto the printed recovery sheet, restoring the property `enc` lacks.
@@ -314,13 +368,16 @@ secrets_encrypt_openssl() {
     -md sha512 -salt -in "${src}" -out "${out}" -pass stdin 2>/dev/null || return 1
   chmod 0600 "${out}"
 
-  local dec; dec="$(tmp_file "rto.XXXXXX")"
+  local dec
+  dec="$(tmp_file "rto.XXXXXX")"
   if printf '%s' "${passphrase}" | openssl enc -d -aes-256-ctr -pbkdf2 -iter 1000000 \
-       -md sha512 -in "${out}" -out "${dec}" -pass stdin 2>/dev/null && cmp -s "${dec}" "${src}"; then
-    local csum; csum="$(sha256sum "${out}" | awk '{print $1}')"
+    -md sha512 -in "${out}" -out "${dec}" -pass stdin 2>/dev/null && cmp -s "${dec}" "${src}"; then
+    local csum
+    csum="$(sha256sum "${out}" | awk '{print $1}')"
     log "openssl: ${out} (round trip verified, ciphertext SHA-256 ${csum})"
     state_touch bundle_openssl_sha256 "${csum}"
-    rm -f "${dec}"; return 0
+    rm -f "${dec}"
+    return 0
   fi
   rm -f "${dec}"
   err "openssl round trip FAILED"
@@ -329,12 +386,15 @@ secrets_encrypt_openssl() {
 
 secrets_ship_escrow() {
   local bundle="$1" url
-  [ -n "${BGB_ESCROW_URLS}" ] || { debug "No escrow targets configured"; return 0; }
+  [ -n "${BGB_ESCROW_URLS}" ] || {
+    debug "No escrow targets configured"
+    return 0
+  }
   for url in ${BGB_ESCROW_URLS}; do
     [ -n "${url}" ] || continue
     log "Shipping the bundle to ${url}"
     case "${url}" in
-      s3://*|https://*)
+      s3://* | https://*)
         if have aws; then
           aws s3 cp "${bundle}" "${url%/}/$(basename "${bundle}")" >/dev/null 2>&1 \
             && log "Uploaded to ${url}" || warn "Upload to ${url} failed"
@@ -343,14 +403,17 @@ secrets_ship_escrow() {
             && log "Uploaded to ${url}" || warn "Upload to ${url} failed"
         else
           warn "Neither aws nor rclone is installed - cannot ship to ${url}"
-        fi ;;
-      sftp://*|scp://*)
+        fi
+        ;;
+      sftp://* | scp://*)
         have scp && scp -q "${bundle}" "${url#*://}" \
-          && log "Copied to ${url}" || warn "Copy to ${url} failed" ;;
+          && log "Copied to ${url}" || warn "Copy to ${url} failed"
+        ;;
       /*)
         install -d -m 0700 "${url}"
         install -m 0600 "${bundle}" "${url}/$(basename "${bundle}")" \
-          && log "Copied to ${url}" || warn "Copy to ${url} failed" ;;
+          && log "Copied to ${url}" || warn "Copy to ${url} failed"
+        ;;
       *) warn "Unsupported escrow URL scheme: ${url}" ;;
     esac
   done
@@ -363,10 +426,22 @@ secrets_cmd_import() {
   local in="" passphrase_file="" force=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --in) in="$2"; shift 2 ;;
-      --in=*) in="${1#*=}"; shift ;;
-      --passphrase-file) passphrase_file="$2"; shift 2 ;;
-      --force) force=1; shift ;;
+      --in)
+        in="$2"
+        shift 2
+        ;;
+      --in=*)
+        in="${1#*=}"
+        shift
+        ;;
+      --passphrase-file)
+        passphrase_file="$2"
+        shift 2
+        ;;
+      --force)
+        force=1
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -380,7 +455,8 @@ secrets_cmd_import() {
     return "${EX_PRECOND}"
   fi
 
-  local work; work="$(tmp_root)/import"
+  local work
+  work="$(tmp_root)/import"
   install -d -m 0700 "${work}"
   local tarball="${work}/bundle.tar"
 
@@ -391,19 +467,22 @@ secrets_cmd_import() {
     passphrase="${BGB_ESCROW_PASSPHRASE}"
   elif [ -t 0 ]; then
     printf 'Bundle passphrase: ' >&2
-    stty -echo 2>/dev/null || true; read -r passphrase; stty echo 2>/dev/null || true; printf '\n' >&2
+    stty -echo 2>/dev/null || true
+    read -r passphrase
+    stty echo 2>/dev/null || true
+    printf '\n' >&2
   fi
   [ -n "${passphrase}" ] && redact_register "${passphrase}"
 
   log "Decrypting ${in}"
   case "${in}" in
     *.age) printf '%s' "${passphrase}" | age -d -o "${tarball}" "${in}" \
-             || die "${EX_FAIL}" "age decryption failed" ;;
+      || die "${EX_FAIL}" "age decryption failed" ;;
     *.gpg) printf '%s' "${passphrase}" | gpg --batch --quiet --passphrase-fd 0 -o "${tarball}" -d "${in}" \
-             || die "${EX_FAIL}" "gpg decryption failed" ;;
+      || die "${EX_FAIL}" "gpg decryption failed" ;;
     *.enc) printf '%s' "${passphrase}" | openssl enc -d -aes-256-ctr -pbkdf2 -iter 1000000 \
-             -md sha512 -in "${in}" -out "${tarball}" -pass stdin \
-             || die "${EX_FAIL}" "openssl decryption failed" ;;
+      -md sha512 -in "${in}" -out "${tarball}" -pass stdin \
+      || die "${EX_FAIL}" "openssl decryption failed" ;;
     *.tar) cp -f "${in}" "${tarball}" ;;
     *) die "${EX_USAGE}" "Unknown bundle format: ${in} (expected .age, .gpg, .enc or .tar)" ;;
   esac
@@ -411,7 +490,8 @@ secrets_cmd_import() {
   tar -C "${work}" -xf "${tarball}" || die "${EX_FAIL}" "Bundle is not a readable tar archive"
   [ -r "${work}/bundle.json" ] || die "${EX_FAIL}" "Bundle is missing bundle.json - is this a bg-backup bundle?"
 
-  local bhost; bhost="$(jq -r '.host // ""' "${work}/bundle.json" 2>/dev/null || true)"
+  local bhost
+  bhost="$(jq -r '.host // ""' "${work}/bundle.json" 2>/dev/null || true)"
   log "Bundle is from host '${bhost}', created $(jq -r '.created // "?"' "${work}/bundle.json" 2>/dev/null)"
   if [ -n "${bhost}" ] && [ "${bhost}" != "$(fqdn)" ]; then
     warn "This bundle is from a DIFFERENT host (${bhost} vs $(fqdn))."
@@ -432,7 +512,7 @@ secrets_cmd_import() {
 
   log "Validating the imported configuration"
   config_load
-  ( config_cmd_validate ) || warn "The imported configuration has problems - run: bg-backup config validate"
+  (config_cmd_validate) || warn "The imported configuration has problems - run: bg-backup config validate"
 
   if repo_env_load && restic_repo_reachable; then
     log "Repository is reachable with the imported credentials"
@@ -453,7 +533,11 @@ secrets_cmd_import() {
 secrets_cmd_show() {
   local reveal=0
   while [ $# -gt 0 ]; do
-    case "$1" in --reveal) reveal=1; shift ;; *) shift ;; esac
+    case "$1" in --reveal)
+      reveal=1
+      shift
+      ;;
+    *) shift ;; esac
   done
   config_load
   repo_env_load
@@ -489,8 +573,10 @@ secrets_cmd_rotate() {
   restic_require
 
   local keyfile="${RESTIC_PASSWORD_FILE:-${BGB_CONFDIR}/credentials/repo.key}"
-  local newpass; newpass="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
-  local newfile; newfile="$(tmp_file "newkey.XXXXXX")"
+  local newpass
+  newpass="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+  local newfile
+  newfile="$(tmp_file "newkey.XXXXXX")"
   printf '%s' "${newpass}" >"${newfile}"
   chmod 0400 "${newfile}"
   redact_register "${newpass}"
@@ -522,13 +608,13 @@ EOF
   # one. Removing first and discovering the new key is wrong afterwards means
   # the repository is unreachable with either.
   log "Verifying the new key from a clean environment"
-  if ! ( env -i \
-          RESTIC_REPOSITORY="${RESTIC_REPOSITORY}" \
-          RESTIC_PASSWORD_FILE="${newfile}" \
-          AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" \
-          AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \
-          AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-}" \
-          "${BGB_RESTIC_BIN}" snapshots >/dev/null 2>&1 ); then
+  if ! (env -i \
+    RESTIC_REPOSITORY="${RESTIC_REPOSITORY}" \
+    RESTIC_PASSWORD_FILE="${newfile}" \
+    AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" \
+    AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \
+    AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-}" \
+    "${BGB_RESTIC_BIN}" snapshots >/dev/null 2>&1); then
     err "The new key does NOT open the repository. Leaving the old key in place."
     err "Remove the stray key by hand once the cause is understood: restic key list"
     return "${EX_REPO}"
@@ -557,8 +643,10 @@ secrets_cmd_add_recovery_key() {
   repo_env_load
   restic_require
 
-  local pass; pass="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
-  local pf; pf="$(tmp_file "reckey.XXXXXX")"
+  local pass
+  pass="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+  local pf
+  pf="$(tmp_file "reckey.XXXXXX")"
   printf '%s' "${pass}" >"${pf}"
   chmod 0400 "${pf}"
   redact_register "${pass}"
@@ -578,7 +666,11 @@ secrets_cmd_add_recovery_key() {
 secrets_cmd_card() {
   local out=""
   while [ $# -gt 0 ]; do
-    case "$1" in --out) out="$2"; shift 2 ;; *) shift ;; esac
+    case "$1" in --out)
+      out="$2"
+      shift 2
+      ;;
+    *) shift ;; esac
   done
   config_load
   repo_env_load 2>/dev/null || true
@@ -588,7 +680,8 @@ secrets_cmd_card() {
 secrets_render_sheet() {
   local bundle="$1" sha="$2" out="${3:-}"
   local sheet
-  sheet="$(cat <<EOF
+  sheet="$(
+    cat <<EOF
 +----------------------------------------------------------------------+
 | BAUER GROUP - BACKUP RECOVERY SHEET                     CONFIDENTIAL  |
 +----------------------------------------------------------------------+
@@ -640,7 +733,7 @@ secrets_render_sheet() {
  7  LAST DR TEST     Date __________  Result __________  By __________
 +----------------------------------------------------------------------+
 EOF
-)"
+  )"
 
   if [ -n "${out}" ]; then
     printf '%s\n' "${sheet}" >"${out}"

@@ -92,21 +92,21 @@ _BGB_MAINTENANCE_CLEANUP_REGISTERED=0
 # monitor_event_severity <event> -> ok | warn | error | info
 monitor_event_severity() {
   case "${1:-}" in
-    success|check_ok|verify_ok) printf 'ok' ;;
-    partial)                    printf 'warn' ;;
-    start)                      printf 'info' ;;
-    *)                          printf 'error' ;;
+    success | check_ok | verify_ok) printf 'ok' ;;
+    partial) printf 'warn' ;;
+    start) printf 'info' ;;
+    *) printf 'error' ;;
   esac
 }
 
 # monitor_event_status <event> -> the status word recorded in state/payloads.
 monitor_event_status() {
   case "${1:-}" in
-    success|check_ok|verify_ok) printf 'ok' ;;
-    partial)                    printf 'partial' ;;
-    degraded)                   printf 'degraded' ;;
-    start)                      printf 'running' ;;
-    *)                          printf 'failed' ;;
+    success | check_ok | verify_ok) printf 'ok' ;;
+    partial) printf 'partial' ;;
+    degraded) printf 'degraded' ;;
+    start) printf 'running' ;;
+    *) printf 'failed' ;;
   esac
 }
 
@@ -121,17 +121,21 @@ monitor_should_notify() {
   sev="$(monitor_event_severity "${event}")"
   case "${BGB_MONITOR_ON:-failure}" in
     never)
-      return 1 ;;
+      return 1
+      ;;
     always)
-      return 0 ;;
+      return 0
+      ;;
     *)
       case "${sev}" in
         error) return 0 ;;
         warn)
           if [ "${JOB_PARTIAL_IS_FAILURE:-0}" = "1" ]; then return 0; fi
-          return 1 ;;
+          return 1
+          ;;
         *) return 1 ;;
-      esac ;;
+      esac
+      ;;
   esac
 }
 
@@ -166,10 +170,19 @@ _monitor_state_field() {
 # instead of a row of zeroes.
 _monitor_pick() {
   local live="${1:-}" job="${2:-}" field="${3:-}" fallback="${4:-}" v
-  if [ -n "${live}" ] && [ "${live}" != "0" ]; then printf '%s' "${live}"; return 0; fi
+  if [ -n "${live}" ] && [ "${live}" != "0" ]; then
+    printf '%s' "${live}"
+    return 0
+  fi
   v="$(_monitor_state_field "${job}" "${field}")"
-  if [ -n "${v}" ] && [ "${v}" != "null" ]; then printf '%s' "${v}"; return 0; fi
-  if [ -n "${live}" ]; then printf '%s' "${live}"; return 0; fi
+  if [ -n "${v}" ] && [ "${v}" != "null" ]; then
+    printf '%s' "${v}"
+    return 0
+  fi
+  if [ -n "${live}" ]; then
+    printf '%s' "${live}"
+    return 0
+  fi
   printf '%s' "${fallback}"
 }
 
@@ -193,14 +206,14 @@ monitor_context() {
   now="$(now_epoch)"
   start="${BGB_RUN_STARTED_EPOCH:-}"
   if [ -n "${start}" ]; then
-    _BGB_EV_DURATION=$(( now - start ))
+    _BGB_EV_DURATION=$((now - start))
     if [ "${_BGB_EV_DURATION}" -lt 0 ]; then _BGB_EV_DURATION=0; fi
   else
     _BGB_EV_DURATION="$(_monitor_pick "" "${job}" duration_seconds 0)"
   fi
-  case "${_BGB_EV_DURATION}" in ''|*[!0-9]*) _BGB_EV_DURATION=0 ;; esac
+  case "${_BGB_EV_DURATION}" in '' | *[!0-9]*) _BGB_EV_DURATION=0 ;; esac
   _BGB_EV_DURATION_HUMAN="$(human_duration "${_BGB_EV_DURATION}")"
-  _BGB_EV_PING_MS=$(( _BGB_EV_DURATION * 1000 ))
+  _BGB_EV_PING_MS=$((_BGB_EV_DURATION * 1000))
 
   _BGB_EV_STARTED="$(_monitor_state_field "${job}" started)"
   _BGB_EV_ENDED="$(_monitor_state_field "${job}" ended)"
@@ -234,30 +247,40 @@ monitor_summary_line() {
   local s=""
   case "${_BGB_EV_EVENT}" in
     start)
-      s="${_BGB_EV_JOB}: started" ;;
+      s="${_BGB_EV_JOB}: started"
+      ;;
     success)
       s="${_BGB_EV_JOB}: OK - $(human_bytes "${_BGB_EV_BYTES_ADDED}") added, ${_BGB_EV_FILES_NEW} new files"
       if [ -n "${_BGB_EV_SNAPSHOT}" ]; then s="${s}, snapshot ${_BGB_EV_SNAPSHOT}"; fi
-      s="${s}, ${_BGB_EV_DURATION_HUMAN}" ;;
+      s="${s}, ${_BGB_EV_DURATION_HUMAN}"
+      ;;
     partial)
       s="${_BGB_EV_JOB}: PARTIAL - snapshot created but ${_BGB_EV_FILES_UNREADABLE} file(s) could not be read"
       if [ -n "${_BGB_EV_SNAPSHOT}" ]; then s="${s}, snapshot ${_BGB_EV_SNAPSHOT}"; fi
-      s="${s}, ${_BGB_EV_DURATION_HUMAN}" ;;
+      s="${s}, ${_BGB_EV_DURATION_HUMAN}"
+      ;;
     degraded)
-      s="${_BGB_EV_JOB}: DEGRADED - ${_BGB_EV_DEGRADED_REASON:-a target was skipped}" ;;
+      s="${_BGB_EV_JOB}: DEGRADED - ${_BGB_EV_DEGRADED_REASON:-a target was skipped}"
+      ;;
     failure)
       s="${_BGB_EV_JOB}: FAILED (exit ${_BGB_EV_RC}) in phase ${_BGB_EV_PHASE:-backup} after ${_BGB_EV_DURATION_HUMAN}"
-      if [ -n "${_BGB_EV_DEGRADED_REASON}" ]; then s="${s} - ${_BGB_EV_DEGRADED_REASON}"; fi ;;
+      if [ -n "${_BGB_EV_DEGRADED_REASON}" ]; then s="${s} - ${_BGB_EV_DEGRADED_REASON}"; fi
+      ;;
     check_ok)
-      s="${_BGB_EV_JOB:-repository}: integrity check passed" ;;
+      s="${_BGB_EV_JOB:-repository}: integrity check passed"
+      ;;
     check_failed)
-      s="${_BGB_EV_JOB:-repository}: INTEGRITY CHECK FAILED (exit ${_BGB_EV_RC}) - the repository may be damaged" ;;
+      s="${_BGB_EV_JOB:-repository}: INTEGRITY CHECK FAILED (exit ${_BGB_EV_RC}) - the repository may be damaged"
+      ;;
     verify_ok)
-      s="${_BGB_EV_JOB:-repository}: restore test passed" ;;
+      s="${_BGB_EV_JOB:-repository}: restore test passed"
+      ;;
     verify_failed)
-      s="${_BGB_EV_JOB:-repository}: RESTORE TEST FAILED (exit ${_BGB_EV_RC}) - snapshots exist but did not restore" ;;
+      s="${_BGB_EV_JOB:-repository}: RESTORE TEST FAILED (exit ${_BGB_EV_RC}) - snapshots exist but did not restore"
+      ;;
     *)
-      s="${_BGB_EV_JOB}: ${_BGB_EV_EVENT} (exit ${_BGB_EV_RC})" ;;
+      s="${_BGB_EV_JOB}: ${_BGB_EV_EVENT} (exit ${_BGB_EV_RC})"
+      ;;
   esac
   if [ -n "${_BGB_EV_DB_DUMPS_FAILED}" ] && [ "${_BGB_EV_DB_DUMPS_FAILED}" != "0" ]; then
     s="${s} [${_BGB_EV_DB_DUMPS_FAILED} database dump(s) failed]"
@@ -279,34 +302,63 @@ monitor_payload() {
   local extra="${1:-}" doc
   doc="$(
     printf '{'
-    json_kvraw schema "${BGB_JSON_SCHEMA}"; printf ','
-    json_kv event "${_BGB_EV_EVENT}"; printf ','
-    json_kv severity "${_BGB_EV_SEVERITY}"; printf ','
-    json_kv status "${_BGB_EV_STATUS}"; printf ','
-    json_kv host "${_BGB_EV_HOST}"; printf ','
-    json_kv job "${_BGB_EV_JOB}"; printf ','
-    json_kv phase "${_BGB_EV_PHASE}"; printf ','
-    json_kv repo "${_BGB_EV_REPO}"; printf ','
-    json_kvraw rc "$(json_num "${_BGB_EV_RC}")"; printf ','
-    json_kv run_id "${_BGB_EV_RUN_ID}"; printf ','
-    json_kv snapshot_id "${_BGB_EV_SNAPSHOT}"; printf ','
-    json_kv started "${_BGB_EV_STARTED}"; printf ','
-    json_kv ended "${_BGB_EV_ENDED}"; printf ','
-    json_kvraw duration_seconds "$(json_num "${_BGB_EV_DURATION}")"; printf ','
-    json_kvraw quiesce_seconds "$(json_num "${_BGB_EV_QUIESCE}")"; printf ','
-    json_kvraw bytes_added "$(json_num "${_BGB_EV_BYTES_ADDED}")"; printf ','
-    json_kvraw bytes_processed "$(json_num "${_BGB_EV_BYTES_PROCESSED}")"; printf ','
-    json_kvraw files_new "$(json_num "${_BGB_EV_FILES_NEW}")"; printf ','
-    json_kvraw files_changed "$(json_num "${_BGB_EV_FILES_CHANGED}")"; printf ','
-    json_kvraw files_unmodified "$(json_num "${_BGB_EV_FILES_UNMODIFIED}")"; printf ','
-    json_kvraw files_unreadable "$(json_num "${_BGB_EV_FILES_UNREADABLE}")"; printf ','
-    json_kvraw db_dumps "$(json_num "${_BGB_EV_DB_DUMPS}")"; printf ','
-    json_kvraw db_dumps_failed "$(json_num "${_BGB_EV_DB_DUMPS_FAILED}")"; printf ','
-    json_kv degraded_reason "${_BGB_EV_DEGRADED_REASON}"; printf ','
-    json_kv message "${_BGB_EV_MSG}"; printf ','
-    json_kv tool_version "${BGB_VERSION:-}"; printf ','
+    json_kvraw schema "${BGB_JSON_SCHEMA}"
+    printf ','
+    json_kv event "${_BGB_EV_EVENT}"
+    printf ','
+    json_kv severity "${_BGB_EV_SEVERITY}"
+    printf ','
+    json_kv status "${_BGB_EV_STATUS}"
+    printf ','
+    json_kv host "${_BGB_EV_HOST}"
+    printf ','
+    json_kv job "${_BGB_EV_JOB}"
+    printf ','
+    json_kv phase "${_BGB_EV_PHASE}"
+    printf ','
+    json_kv repo "${_BGB_EV_REPO}"
+    printf ','
+    json_kvraw rc "$(json_num "${_BGB_EV_RC}")"
+    printf ','
+    json_kv run_id "${_BGB_EV_RUN_ID}"
+    printf ','
+    json_kv snapshot_id "${_BGB_EV_SNAPSHOT}"
+    printf ','
+    json_kv started "${_BGB_EV_STARTED}"
+    printf ','
+    json_kv ended "${_BGB_EV_ENDED}"
+    printf ','
+    json_kvraw duration_seconds "$(json_num "${_BGB_EV_DURATION}")"
+    printf ','
+    json_kvraw quiesce_seconds "$(json_num "${_BGB_EV_QUIESCE}")"
+    printf ','
+    json_kvraw bytes_added "$(json_num "${_BGB_EV_BYTES_ADDED}")"
+    printf ','
+    json_kvraw bytes_processed "$(json_num "${_BGB_EV_BYTES_PROCESSED}")"
+    printf ','
+    json_kvraw files_new "$(json_num "${_BGB_EV_FILES_NEW}")"
+    printf ','
+    json_kvraw files_changed "$(json_num "${_BGB_EV_FILES_CHANGED}")"
+    printf ','
+    json_kvraw files_unmodified "$(json_num "${_BGB_EV_FILES_UNMODIFIED}")"
+    printf ','
+    json_kvraw files_unreadable "$(json_num "${_BGB_EV_FILES_UNREADABLE}")"
+    printf ','
+    json_kvraw db_dumps "$(json_num "${_BGB_EV_DB_DUMPS}")"
+    printf ','
+    json_kvraw db_dumps_failed "$(json_num "${_BGB_EV_DB_DUMPS_FAILED}")"
+    printf ','
+    json_kv degraded_reason "${_BGB_EV_DEGRADED_REASON}"
+    printf ','
+    json_kv message "${_BGB_EV_MSG}"
+    printf ','
+    json_kv tool_version "${BGB_VERSION:-}"
+    printf ','
     json_kv generated "$(now_iso)"
-    [ -n "${extra}" ] && { printf ','; printf '%s' "${extra}"; }
+    [ -n "${extra}" ] && {
+      printf ','
+      printf '%s' "${extra}"
+    }
     printf '}'
   )"
 
@@ -324,13 +376,16 @@ monitor_payload() {
 monitor_log_file() {
   local job="${1:-}"
   if [ -n "${BGB_RUN_LOG:-}" ] && [ -r "${BGB_RUN_LOG}" ]; then
-    printf '%s' "${BGB_RUN_LOG}"; return 0
+    printf '%s' "${BGB_RUN_LOG}"
+    return 0
   fi
   if [ -n "${_BGB_LOGFILE:-}" ] && [ -r "${_BGB_LOGFILE}" ]; then
-    printf '%s' "${_BGB_LOGFILE}"; return 0
+    printf '%s' "${_BGB_LOGFILE}"
+    return 0
   fi
   if [ -n "${job}" ] && [ -r "${BGB_LOG_DIR}/${job}.log" ]; then
-    printf '%s' "${BGB_LOG_DIR}/${job}.log"; return 0
+    printf '%s' "${BGB_LOG_DIR}/${job}.log"
+    return 0
   fi
   [ -r "${BGB_LOG_DIR}/bg-backup.log" ] && printf '%s' "${BGB_LOG_DIR}/bg-backup.log"
   return 0
@@ -342,7 +397,10 @@ monitor_log_file() {
 monitor_excerpt_file() {
   local job="${1:-}" src out
   out="$(tmp_file "excerpt.XXXXXX" 2>/dev/null || true)"
-  [ -n "${out}" ] || { printf ''; return 0; }
+  [ -n "${out}" ] || {
+    printf ''
+    return 0
+  }
   chmod 0600 "${out}" 2>/dev/null || true
   src="$(monitor_log_file "${job}")"
   if [ -n "${src}" ] && [ -r "${src}" ]; then
@@ -379,7 +437,10 @@ monitor_curl_escape() {
 monitor_curl_conf_new() {
   local f
   f="$(tmp_file "curl.XXXXXX" 2>/dev/null || true)"
-  [ -n "${f}" ] || { printf ''; return 0; }
+  [ -n "${f}" ] || {
+    printf ''
+    return 0
+  }
   chmod 0600 "${f}" 2>/dev/null || true
   {
     printf 'silent\n'
@@ -394,7 +455,10 @@ monitor_curl_conf_new() {
     printf 'retry = 2\n'
     printf 'retry-delay = 2\n'
     printf 'user-agent = "bg-backup/%s"\n' "$(monitor_curl_escape "${BGB_VERSION:-0}")"
-  } >"${f}" 2>/dev/null || { printf ''; return 0; }
+  } >"${f}" 2>/dev/null || {
+    printf ''
+    return 0
+  }
   printf '%s' "${f}"
 }
 
@@ -408,7 +472,8 @@ monitor_curl_conf_add() {
 # monitor_curl_run <config-file> - execute, printing curl's own error on stderr
 # (which the dispatcher captures and logs redacted).
 monitor_curl_run() {
-  local conf="${1:-}"; shift || true
+  local conf="${1:-}"
+  shift || true
   if ! have curl; then
     printf 'curl is not installed - cannot deliver notification\n' >&2
     return 1
@@ -490,11 +555,12 @@ monitor_load_notifier() {
 # of that. So the watchdog is implemented here with the same semantics timeout
 # has - TERM at the deadline, KILL one second later.
 monitor_run_guarded() {
-  local fn="${1:-}"; shift || true
+  local fn="${1:-}"
+  shift || true
   local secs="${BGB_MONITOR_TIMEOUT_SECONDS:-15}"
   local out pid rc=0 waited=0 timed_out=0 line
 
-  case "${secs}" in ''|*[!0-9]*) secs=15 ;; esac
+  case "${secs}" in '' | *[!0-9]*) secs=15 ;; esac
   # 0 is not a way to disable the watchdog: a provider that hangs forever holds
   # the whole run open and delays the next scheduled one.
   [ "${secs}" -lt 1 ] && secs=1
@@ -524,7 +590,7 @@ monitor_run_guarded() {
       break
     fi
     sleep 1
-    waited=$(( waited + 1 ))
+    waited=$((waited + 1))
   done
 
   # `wait` on a killed child returns 128+signal; suppress bash's own job-status
@@ -563,7 +629,7 @@ monitor_notify() {
   [ -n "${event}" ] || return 0
 
   if [ "${BGB_MONITOR_ON:-failure}" = "never" ] \
-     && [ -z "${BGB_MONITOR_STATEFUL_NOTIFIERS}" ]; then
+    && [ -z "${BGB_MONITOR_STATEFUL_NOTIFIERS}" ]; then
     debug "monitor: BGB_MONITOR_ON=never, nothing to dispatch"
     return 0
   fi
@@ -622,7 +688,10 @@ monitor_notify() {
 monitor_maintenance_begin() {
   local job="${1:-${BGB_JOB:-}}" fn
   [ "${BGB_MONITOR_KUMA_MAINTENANCE:-0}" = "1" ] || return 0
-  [ "${BGB_DRY_RUN:-0}" = "1" ] && { log "[dry-run] would open the Kuma maintenance window"; return 0; }
+  [ "${BGB_DRY_RUN:-0}" = "1" ] && {
+    log "[dry-run] would open the Kuma maintenance window"
+    return 0
+  }
 
   # Not $( ): the load is a side effect and a subshell would discard it.
   if ! monitor_load_notifier uptime-kuma; then

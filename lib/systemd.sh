@@ -250,7 +250,7 @@ systemd_priority_values() {
   local prio="${1:-low}" quiesce="${2:-none}"
 
   case "${quiesce}" in
-    docker-pause|docker-stop|service-stop)
+    docker-pause | docker-stop | service-stop)
       if [ "${prio}" = "low" ]; then
         debug "Raising priority low -> normal: JOB_QUIESCE=${quiesce} holds a service down"
         prio="normal"
@@ -259,9 +259,19 @@ systemd_priority_values() {
   esac
 
   case "${prio}" in
-    high)   BGB_SYSTEMD_NICE=0;  BGB_SYSTEMD_IOPRIO=0 ;;
-    normal) BGB_SYSTEMD_NICE=5;  BGB_SYSTEMD_IOPRIO=4 ;;
-    *)      prio="low"; BGB_SYSTEMD_NICE=10; BGB_SYSTEMD_IOPRIO=7 ;;
+    high)
+      BGB_SYSTEMD_NICE=0
+      BGB_SYSTEMD_IOPRIO=0
+      ;;
+    normal)
+      BGB_SYSTEMD_NICE=5
+      BGB_SYSTEMD_IOPRIO=4
+      ;;
+    *)
+      prio="low"
+      BGB_SYSTEMD_NICE=10
+      BGB_SYSTEMD_IOPRIO=7
+      ;;
   esac
   BGB_SYSTEMD_PRIORITY="${prio}"
   return 0
@@ -284,8 +294,9 @@ systemd_priority_values() {
 #      than replacing the shipped list, and the missing-file problem would
 #      survive the fix meant to solve it.
 systemd_credential_dropin() {
-  local unit="$1"; shift
-  local -a pairs=("$@")   # "id:path" entries
+  local unit="$1"
+  shift
+  local -a pairs=("$@") # "id:path" entries
   local pair path content
 
   # Built as a string and fed in with a here-string rather than a pipeline.
@@ -524,7 +535,8 @@ EOF
 # Orphan removal
 # -----------------------------------------------------------------------------
 _systemd_known_job() {
-  local want="$1"; shift
+  local want="$1"
+  shift
   local j
   for j in "$@"; do
     [ "${j}" = "${want}" ] && return 0
@@ -605,7 +617,7 @@ systemd_sync() {
   )
   local u
   for u in bg-backup@.service bg-backup-check.service bg-backup-prune.service \
-           bg-backup-verify.service; do
+    bg-backup-verify.service; do
     systemd_credential_dropin "${u}" "${creds[@]}"
   done
 
@@ -639,7 +651,7 @@ systemd_sync() {
     # reconciled - least of all the removal of an orphan. The second, real call
     # is what populates JOB_* in THIS shell; the subshell's assignments are
     # discarded with its process.
-    if ! ( config_load_job "${job}" ) >/dev/null 2>&1; then
+    if ! (config_load_job "${job}") >/dev/null 2>&1; then
       warn "Skipping '${job}': its configuration does not validate (bg-backup config validate)"
       rc="${EX_PRECOND}"
       continue
@@ -654,10 +666,10 @@ systemd_sync() {
 
   # --- maintenance ------------------------------------------------------------
   systemd_prune_marker
-  _systemd_maint_timer check  "${BGB_CHECK_SCHEDULE}"  "${BGB_MAINT_RANDOM_DELAY}" || rc="${EX_PRECOND}"
-  _systemd_maint_timer prune  "${BGB_PRUNE_SCHEDULE}"  "${BGB_MAINT_RANDOM_DELAY}" || rc="${EX_PRECOND}"
+  _systemd_maint_timer check "${BGB_CHECK_SCHEDULE}" "${BGB_MAINT_RANDOM_DELAY}" || rc="${EX_PRECOND}"
+  _systemd_maint_timer prune "${BGB_PRUNE_SCHEDULE}" "${BGB_MAINT_RANDOM_DELAY}" || rc="${EX_PRECOND}"
   _systemd_maint_timer verify "${BGB_VERIFY_SCHEDULE}" "${BGB_MAINT_RANDOM_DELAY}" || rc="${EX_PRECOND}"
-  _systemd_maint_timer copy   "${BGB_COPY_SCHEDULE}"   "${BGB_MAINT_RANDOM_DELAY}" || rc="${EX_PRECOND}"
+  _systemd_maint_timer copy "${BGB_COPY_SCHEDULE}" "${BGB_MAINT_RANDOM_DELAY}" || rc="${EX_PRECOND}"
 
   # --- orphans ----------------------------------------------------------------
   # Deliberately AFTER the job loop and using only the jobs that survived
@@ -682,10 +694,16 @@ systemd_sync() {
 _systemd_usec_to_iso() {
   local usec="${1:-}" secs
   case "${usec}" in
-    ''|0|infinity|n/a|*[!0-9]*) printf ''; return 0 ;;
+    '' | 0 | infinity | n/a | *[!0-9]*)
+      printf ''
+      return 0
+      ;;
   esac
-  secs=$(( usec / 1000000 ))
-  [ "${secs}" -gt 0 ] || { printf ''; return 0; }
+  secs=$((usec / 1000000))
+  [ "${secs}" -gt 0 ] || {
+    printf ''
+    return 0
+  }
   date -u -d "@${secs}" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf ''
 }
 
@@ -735,15 +753,16 @@ cmd_schedule() {
   local sub="${1:-list}"
   [ $# -gt 0 ] && shift
   case "${sub}" in
-    sync)    schedule_cmd_sync "$@" ;;
-    enable)  schedule_cmd_enable "$@" ;;
+    sync) schedule_cmd_sync "$@" ;;
+    enable) schedule_cmd_enable "$@" ;;
     disable) schedule_cmd_disable "$@" ;;
-    list|status) schedule_cmd_list "$@" ;;
-    help|--help|-h) schedule_usage ;;
+    list | status) schedule_cmd_list "$@" ;;
+    help | --help | -h) schedule_usage ;;
     *)
       err "Unknown subcommand: schedule ${sub}"
       schedule_usage
-      exit "${EX_USAGE}" ;;
+      exit "${EX_USAGE}"
+      ;;
   esac
 }
 
@@ -794,7 +813,7 @@ _schedule_target_timers() {
     printf '%s\n' "$(systemd_unit_for_job "${job}" timer)"
   done
 
-  [ -n "${BGB_CHECK_SCHEDULE}" ]  && printf 'bg-backup-check.timer\n'
+  [ -n "${BGB_CHECK_SCHEDULE}" ] && printf 'bg-backup-check.timer\n'
   [ -n "${BGB_VERIFY_SCHEDULE}" ] && printf 'bg-backup-verify.timer\n'
   # prune only where it is allowed, copy only where there is a second repository
   if [ -n "${BGB_PRUNE_SCHEDULE}" ] && [ "${BGB_REPO_ROLE}" = "primary" ]; then
@@ -879,7 +898,7 @@ schedule_cmd_list() {
       first=0
     done
     for timer in bg-backup-check.timer bg-backup-prune.timer \
-                 bg-backup-verify.timer bg-backup-copy.timer; do
+      bg-backup-verify.timer bg-backup-copy.timer; do
       line="$(systemd_timer_state "${timer}")"
       [ "${first}" -eq 0 ] && body+=","
       body+="$(_schedule_json_row "" "${line}")"
@@ -896,7 +915,7 @@ schedule_cmd_list() {
   for job in "${jobs[@]:-}"; do
     [ -n "${job}" ] || continue
     timer="$(systemd_unit_for_job "${job}" timer)"
-    if ( config_load_job "${job}" ) >/dev/null 2>&1; then
+    if (config_load_job "${job}") >/dev/null 2>&1; then
       config_load_job "${job}"
       _schedule_print_row "${timer}" "${JOB_SCHEDULE:-<none>}"
     else
@@ -904,10 +923,10 @@ schedule_cmd_list() {
     fi
   done
 
-  _schedule_print_row bg-backup-check.timer  "${BGB_CHECK_SCHEDULE:-<none>}"
-  _schedule_print_row bg-backup-prune.timer  "${BGB_PRUNE_SCHEDULE:-<none>}"
+  _schedule_print_row bg-backup-check.timer "${BGB_CHECK_SCHEDULE:-<none>}"
+  _schedule_print_row bg-backup-prune.timer "${BGB_PRUNE_SCHEDULE:-<none>}"
   _schedule_print_row bg-backup-verify.timer "${BGB_VERIFY_SCHEDULE:-<none>}"
-  _schedule_print_row bg-backup-copy.timer   "${BGB_COPY_SCHEDULE:-<none>}"
+  _schedule_print_row bg-backup-copy.timer "${BGB_COPY_SCHEDULE:-<none>}"
 
   if [ "${BGB_REPO_ROLE}" != "primary" ] && [ -n "${BGB_PRUNE_SCHEDULE}" ]; then
     printf '\n'
@@ -929,11 +948,16 @@ _schedule_json_row() {
   line="$2"
   IFS=$'\t' read -r unit enabled active next last <<<"${line}"
   printf '{'
-  json_kv unit "${unit}"; printf ','
-  json_kv job "${job}"; printf ','
-  json_kv enabled "${enabled}"; printf ','
-  json_kv active "${active}"; printf ','
-  json_kv next_run "${next}"; printf ','
+  json_kv unit "${unit}"
+  printf ','
+  json_kv job "${job}"
+  printf ','
+  json_kv enabled "${enabled}"
+  printf ','
+  json_kv active "${active}"
+  printf ','
+  json_kv next_run "${next}"
+  printf ','
   json_kv last_run "${last}"
   printf '}'
 }

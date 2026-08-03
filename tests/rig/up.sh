@@ -38,13 +38,17 @@ TIMEOUT="${BGB_RIG_TIMEOUT:-120}"
 state=""
 for _ in $(seq 1 "${TIMEOUT}"); do
   state="$("${COMPOSE[@]}" ps -a --format '{{.Service}} {{.State}} {{.ExitCode}}' 2>/dev/null \
-           | awk '$1 == "minio-init" { print $2 ":" $3 }')"
+    | awk '$1 == "minio-init" { print $2 ":" $3 }')"
   case "${state}" in
-    exited:0) echo "rig ready (bucket and scoped policy in place)"; exit 0 ;;
+    exited:0)
+      echo "rig ready (bucket and scoped policy in place)"
+      exit 0
+      ;;
     exited:*)
       echo "rig: minio-init FAILED (${state}) - the bucket or the scoped policy was not created" >&2
       "${COMPOSE[@]}" logs minio-init | tail -30 >&2
-      exit 1 ;;
+      exit 1
+      ;;
   esac
   sleep 1
 done

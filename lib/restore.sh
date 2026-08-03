@@ -32,19 +32,25 @@ restore_unsafe_list() { printf '%s/dr/unsafe-restore.list' "${BGB_SHARE_DIR}"; }
 restore_classify() {
   local path="$1" f class glob
   f="$(restore_unsafe_list)"
-  [ -r "${f}" ] || { printf 'AUTO'; return 0; }
+  [ -r "${f}" ] || {
+    printf 'AUTO'
+    return 0
+  }
 
   # NEVER wins over STAGED regardless of file order.
   local result="AUTO"
   while read -r class glob; do
-    case "${class}" in ''|\#*) continue ;; esac
+    case "${class}" in '' | \#*) continue ;; esac
     [ -n "${glob}" ] || continue
     # Unquoted on purpose: the right-hand side is a glob and matching it as a
     # pattern is the entire function.
     # shellcheck disable=SC2053
     if [[ "${path}" == ${glob} ]]; then
       case "${class}" in
-        NEVER)  printf 'NEVER'; return 0 ;;
+        NEVER)
+          printf 'NEVER'
+          return 0
+          ;;
         STAGED) result="STAGED" ;;
       esac
     fi
@@ -96,7 +102,10 @@ _restore_snapshots_json() {
 restore_resolve_snapshot() {
   local run="$1" at="$2" snapshot="$3" job="$4" kind="${5:-files}" host="${6:-}" path="${7:-}"
 
-  if [ -n "${snapshot}" ]; then printf '%s' "${snapshot}"; return 0; fi
+  if [ -n "${snapshot}" ]; then
+    printf '%s' "${snapshot}"
+    return 0
+  fi
   require_jq
 
   local json
@@ -144,64 +153,179 @@ restore_new_token() {
 # Command
 # -----------------------------------------------------------------------------
 cmd_restore() {
-  local sub="${1:-}"; shift || true
+  local sub="${1:-}"
+  shift || true
   case "${sub}" in
-    file|dir)   restore_path_cmd "${sub}" "$@" ;;
-    volume)     restore_volume_cmd "$@" ;;
-    project)    restore_project_cmd "$@" ;;
-    db)         restore_db_cmd "$@" ;;
-    system)     restore_system_cmd "$@" ;;
-    preview)    BGB_RESTORE_PREVIEW=1 cmd_restore "$@" ;;
-    commit)     restore_commit_cmd "$@" ;;
-    rollback)   restore_rollback_cmd "$@" ;;
-    ''|--help|-h) usage_restore ;;
-    *)          err "Unknown subcommand: restore ${sub}"; usage_restore; exit "${EX_USAGE}" ;;
+    file | dir) restore_path_cmd "${sub}" "$@" ;;
+    volume) restore_volume_cmd "$@" ;;
+    project) restore_project_cmd "$@" ;;
+    db) restore_db_cmd "$@" ;;
+    system) restore_system_cmd "$@" ;;
+    preview) BGB_RESTORE_PREVIEW=1 cmd_restore "$@" ;;
+    commit) restore_commit_cmd "$@" ;;
+    rollback) restore_rollback_cmd "$@" ;;
+    '' | --help | -h) usage_restore ;;
+    *)
+      err "Unknown subcommand: restore ${sub}"
+      usage_restore
+      exit "${EX_USAGE}"
+      ;;
   esac
 }
 
 restore_parse_common() {
-  R_RUN=""; R_AT=""; R_SNAPSHOT=""; R_JOB=""; R_TARGET=""; R_INPLACE=0
-  R_OVERWRITE="if-newer"; R_VERIFY=0; R_SCRIPT=""; R_FORCE_UNSAFE=0
-  R_PATH=""; R_NAME=""; R_DB=""; R_INTO="scratch"; R_SWAP=0; R_SOURCE_HOST=""
-  R_PROFILE="safe"; R_CONFIG_ONLY=0; R_RECREATE=0; R_DELETE_EXTRANEOUS=0
+  R_RUN=""
+  R_AT=""
+  R_SNAPSHOT=""
+  R_JOB=""
+  R_TARGET=""
+  R_INPLACE=0
+  R_OVERWRITE="if-newer"
+  R_VERIFY=0
+  R_SCRIPT=""
+  R_FORCE_UNSAFE=0
+  R_PATH=""
+  R_NAME=""
+  R_DB=""
+  R_INTO="scratch"
+  R_SWAP=0
+  R_SOURCE_HOST=""
+  R_PROFILE="safe"
+  R_CONFIG_ONLY=0
+  R_RECREATE=0
+  R_DELETE_EXTRANEOUS=0
   _RESTORE_REST=()
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --run)        R_RUN="$2"; shift 2 ;;
-      --run=*)      R_RUN="${1#*=}"; shift ;;
-      --at)         R_AT="$2"; shift 2 ;;
-      --at=*)       R_AT="${1#*=}"; shift ;;
-      --snapshot)   R_SNAPSHOT="$2"; shift 2 ;;
-      --snapshot=*) R_SNAPSHOT="${1#*=}"; shift ;;
-      --job)        R_JOB="$2"; shift 2 ;;
-      --job=*)      R_JOB="${1#*=}"; shift ;;
+      --run)
+        R_RUN="$2"
+        shift 2
+        ;;
+      --run=*)
+        R_RUN="${1#*=}"
+        shift
+        ;;
+      --at)
+        R_AT="$2"
+        shift 2
+        ;;
+      --at=*)
+        R_AT="${1#*=}"
+        shift
+        ;;
+      --snapshot)
+        R_SNAPSHOT="$2"
+        shift 2
+        ;;
+      --snapshot=*)
+        R_SNAPSHOT="${1#*=}"
+        shift
+        ;;
+      --job)
+        R_JOB="$2"
+        shift 2
+        ;;
+      --job=*)
+        R_JOB="${1#*=}"
+        shift
+        ;;
       # The hostname RECORDED IN THE SNAPSHOTS, which on a rebuilt machine is
       # not this machine's hostname. Needed only when one repository holds
       # several hosts; otherwise it is inferred and reported.
-      --source-host)   R_SOURCE_HOST="$2"; shift 2 ;;
-      --source-host=*) R_SOURCE_HOST="${1#*=}"; shift ;;
-      --path)       R_PATH="$2"; shift 2 ;;
-      --path=*)     R_PATH="${1#*=}"; shift ;;
-      --name)       R_NAME="$2"; shift 2 ;;
-      --name=*)     R_NAME="${1#*=}"; shift ;;
-      --db)         R_DB="$2"; shift 2 ;;
-      --db=*)       R_DB="${1#*=}"; shift ;;
-      --into)       R_INTO="$2"; shift 2 ;;
-      --to)         R_TARGET="$2"; shift 2 ;;
-      --to=*)       R_TARGET="${1#*=}"; shift ;;
-      --in-place)   R_INPLACE=1; shift ;;
-      --swap)       R_SWAP=1; shift ;;
-      --overwrite)  R_OVERWRITE="$2"; shift 2 ;;
-      --verify)     R_VERIFY=1; shift ;;
-      --generate-script) R_SCRIPT="$2"; shift 2 ;;
-      --force-unsafe)    R_FORCE_UNSAFE=1; shift ;;
-      --profile)    R_PROFILE="$2"; shift 2 ;;
-      --config-only) R_CONFIG_ONLY=1; shift ;;
-      --recreate)   R_RECREATE=1; shift ;;
-      --delete-extraneous) R_DELETE_EXTRANEOUS=1; shift ;;
-      -*) err "Unknown flag for restore: $1"; usage_restore; exit "${EX_USAGE}" ;;
-      *) _RESTORE_REST+=("$1"); shift ;;
+      --source-host)
+        R_SOURCE_HOST="$2"
+        shift 2
+        ;;
+      --source-host=*)
+        R_SOURCE_HOST="${1#*=}"
+        shift
+        ;;
+      --path)
+        R_PATH="$2"
+        shift 2
+        ;;
+      --path=*)
+        R_PATH="${1#*=}"
+        shift
+        ;;
+      --name)
+        R_NAME="$2"
+        shift 2
+        ;;
+      --name=*)
+        R_NAME="${1#*=}"
+        shift
+        ;;
+      --db)
+        R_DB="$2"
+        shift 2
+        ;;
+      --db=*)
+        R_DB="${1#*=}"
+        shift
+        ;;
+      --into)
+        R_INTO="$2"
+        shift 2
+        ;;
+      --to)
+        R_TARGET="$2"
+        shift 2
+        ;;
+      --to=*)
+        R_TARGET="${1#*=}"
+        shift
+        ;;
+      --in-place)
+        R_INPLACE=1
+        shift
+        ;;
+      --swap)
+        R_SWAP=1
+        shift
+        ;;
+      --overwrite)
+        R_OVERWRITE="$2"
+        shift 2
+        ;;
+      --verify)
+        R_VERIFY=1
+        shift
+        ;;
+      --generate-script)
+        R_SCRIPT="$2"
+        shift 2
+        ;;
+      --force-unsafe)
+        R_FORCE_UNSAFE=1
+        shift
+        ;;
+      --profile)
+        R_PROFILE="$2"
+        shift 2
+        ;;
+      --config-only)
+        R_CONFIG_ONLY=1
+        shift
+        ;;
+      --recreate)
+        R_RECREATE=1
+        shift
+        ;;
+      --delete-extraneous)
+        R_DELETE_EXTRANEOUS=1
+        shift
+        ;;
+      -*)
+        err "Unknown flag for restore: $1"
+        usage_restore
+        exit "${EX_USAGE}"
+        ;;
+      *)
+        _RESTORE_REST+=("$1")
+        shift
+        ;;
     esac
   done
   [ -z "${R_JOB}" ] && [ "${#BGB_JOB_FILTER[@]}" -gt 0 ] && R_JOB="${BGB_JOB_FILTER[0]}"
@@ -220,7 +344,8 @@ restore_parse_common() {
 # file / dir
 # -----------------------------------------------------------------------------
 restore_path_cmd() {
-  local kind="$1"; shift
+  local kind="$1"
+  shift
   restore_parse_common "$@"
   [ -n "${R_PATH}" ] || die "${EX_USAGE}" "restore ${kind} requires --path"
 
@@ -234,20 +359,23 @@ restore_path_cmd() {
   [ -n "${snap}" ] || die "${EX_PRECOND}" "No snapshot matches the given selector"
   log "Using snapshot ${snap}"
 
-  local class; class="$(restore_classify "${R_PATH}")"
+  local class
+  class="$(restore_classify "${R_PATH}")"
   case "${class}" in
     NEVER)
       err "'${R_PATH}' is on the NEVER list: restoring it can leave this host unbootable or unreachable."
       err "See $(restore_unsafe_list) and docs/runbooks/disaster-recovery.md."
       [ "${R_FORCE_UNSAFE}" = "1" ] || return "${EX_SAFETY}"
-      warn "--force-unsafe given: proceeding against advice" ;;
+      warn "--force-unsafe given: proceeding against advice"
+      ;;
     STAGED)
       if [ "${R_INPLACE}" = "1" ] && [ "${R_FORCE_UNSAFE}" != "1" ]; then
         err "'${R_PATH}' is classified STAGED: it must be reviewed before it replaces the live file."
         err "Restore it to a directory and diff it:"
         err "    bg-backup restore ${kind} --path '${R_PATH}' --to /tmp/review"
         return "${EX_SAFETY}"
-      fi ;;
+      fi
+      ;;
   esac
 
   if restore_is_dpkg_conffile_modified "${R_PATH}" && [ "${R_INPLACE}" = "1" ]; then
@@ -256,7 +384,8 @@ restore_path_cmd() {
     confirm "Restore it anyway?" || return "${EX_SAFETY}"
   fi
 
-  local token; token="$(restore_new_token)"
+  local token
+  token="$(restore_new_token)"
   local staging="${R_TARGET}"
   [ -z "${staging}" ] && staging="${BGB_RESTORE_ROOT}/${token}"
 
@@ -271,7 +400,7 @@ restore_path_cmd() {
   local -a args=(restore "${snap}" --target "${staging}" --include "${R_PATH}")
   [ "${R_VERIFY}" = "1" ] && args+=(--verify)
   case "${R_OVERWRITE}" in
-    always|never|if-newer|if-changed) args+=(--overwrite "${R_OVERWRITE}") ;;
+    always | never | if-newer | if-changed) args+=(--overwrite "${R_OVERWRITE}") ;;
   esac
 
   if [ -n "${R_SCRIPT}" ]; then
@@ -302,7 +431,10 @@ restore_swap_into_place() {
   [ -e "${src}" ] || die "${EX_FAIL}" "Nothing was restored at ${src}"
 
   confirm "Replace ${path} with the restored copy? (the current one is kept as ${backup})" \
-    || { log "Left the restored copy at ${src}"; return 0; }
+    || {
+      log "Left the restored copy at ${src}"
+      return 0
+    }
 
   # Same-filesystem check. Across filesystems this is a copy, not a rename: not
   # atomic, and it needs room for both copies at once. Saying so beats silently
@@ -335,7 +467,11 @@ restore_swap_into_place() {
 restore_commit_cmd() {
   local token=""
   while [ $# -gt 0 ]; do
-    case "$1" in --token) token="$2"; shift 2 ;; *) shift ;; esac
+    case "$1" in --token)
+      token="$2"
+      shift 2
+      ;;
+    *) shift ;; esac
   done
   [ -n "${token}" ] || die "${EX_USAGE}" "restore commit requires --token"
   require_root
@@ -357,7 +493,11 @@ restore_commit_cmd() {
 restore_rollback_cmd() {
   local token=""
   while [ $# -gt 0 ]; do
-    case "$1" in --token) token="$2"; shift 2 ;; *) shift ;; esac
+    case "$1" in --token)
+      token="$2"
+      shift 2
+      ;;
+    *) shift ;; esac
   done
   [ -n "${token}" ] || die "${EX_USAGE}" "restore rollback requires --token"
   require_root
@@ -398,26 +538,30 @@ restore_preview() {
 
   local n=0 line type name size mode
   while IFS= read -r line; do
-    type="$(printf '%s'  "${line}" | jq -r '.type // ""')"
-    name="$(printf '%s'  "${line}" | jq -r '.path // ""')"
-    size="$(printf '%s'  "${line}" | jq -r '.size // 0')"
-    mode="$(printf '%s'  "${line}" | jq -r '.mode // 0')"
+    type="$(printf '%s' "${line}" | jq -r '.type // ""')"
+    name="$(printf '%s' "${line}" | jq -r '.path // ""')"
+    size="$(printf '%s' "${line}" | jq -r '.size // 0')"
+    mode="$(printf '%s' "${line}" | jq -r '.mode // 0')"
     [ -n "${name}" ] || continue
-    n=$(( n + 1 ))
+    n=$((n + 1))
 
     local class action
     class="$(restore_classify "${name}")"
     if [ -e "${name}" ]; then
-      local cur_size; cur_size="$(stat -c %s "${name}" 2>/dev/null || echo 0)"
+      local cur_size
+      cur_size="$(stat -c %s "${name}" 2>/dev/null || echo 0)"
       if [ "${cur_size}" = "${size}" ]; then action="identical"; else action="overwrite"; fi
     else
       action="create"
     fi
 
     case "${class}" in
-      NEVER)  printf '  %sDANGER%s   %-10s %s\n' "${C_RED}" "${C_RESET}" "${action}" "${name}"; danger=1 ;;
+      NEVER)
+        printf '  %sDANGER%s   %-10s %s\n' "${C_RED}" "${C_RESET}" "${action}" "${name}"
+        danger=1
+        ;;
       STAGED) printf '  %sreview%s   %-10s %s\n' "${C_YELLOW}" "${C_RESET}" "${action}" "${name}" ;;
-      *)      [ "${n}" -le 200 ] && printf '           %-10s %s (%s, mode %s)\n' "${action}" "${name}" "$(human_bytes "${size}")" "${mode}" ;;
+      *) [ "${n}" -le 200 ] && printf '           %-10s %s (%s, mode %s)\n' "${action}" "${name}" "$(human_bytes "${size}")" "${mode}" ;;
     esac
   done < <(restic_capture ls --json "${snap}" "${path}" 2>/dev/null | grep '"struct_type":"node"' || true)
 
@@ -432,7 +576,8 @@ restore_preview() {
 }
 
 restore_generate_script() {
-  local out="$1" snap="$2" staging="$3" path="$4"; shift 4
+  local out="$1" snap="$2" staging="$3" path="$4"
+  shift 4
   {
     printf '#!/usr/bin/env bash\n'
     printf '# Generated by bg-backup %s on %s\n' "${BGB_VERSION}" "$(now_iso)"
@@ -466,14 +611,16 @@ restore_volume_cmd() {
   restic_require
   require_cmd docker
 
-  local mp; mp="$(docker volume inspect "${R_NAME}" 2>/dev/null | jq -r '.[0].Mountpoint // empty')"
+  local mp
+  mp="$(docker volume inspect "${R_NAME}" 2>/dev/null | jq -r '.[0].Mountpoint // empty')"
   if [ -z "${mp}" ]; then
     log "Volume '${R_NAME}' does not exist - creating it"
     docker volume create "${R_NAME}" >/dev/null
     mp="$(docker volume inspect "${R_NAME}" | jq -r '.[0].Mountpoint')"
   fi
 
-  local users; users="$(docker ps -q --filter "volume=${R_NAME}" 2>/dev/null || true)"
+  local users
+  users="$(docker ps -q --filter "volume=${R_NAME}" 2>/dev/null || true)"
   if [ -n "${users}" ]; then
     err "These containers are using volume '${R_NAME}':"
     docker ps --filter "volume=${R_NAME}" --format '    {{.Names}} ({{.Image}})' >&2
@@ -541,20 +688,24 @@ restore_db_cmd() {
     -)
       # Straight to stdout: the operator pipes it wherever they want. This is
       # also the documented manual path in the recovery sheet.
-      restic_exec dump "${snap}" "/${path}" ;;
+      restic_exec dump "${snap}" "/${path}"
+      ;;
     scratch)
       lib_source verify.sh
-      verify_restore_into_scratch "${snap}" "${path}" ;;
+      verify_restore_into_scratch "${snap}" "${path}"
+      ;;
     *)
       local container="${R_INTO}"
-      local engine; engine="$(printf '%s' "${R_DB}" | cut -d/ -f1)"
+      local engine
+      engine="$(printf '%s' "${R_DB}" | cut -d/ -f1)"
       lib_source db.sh
       db_load_engine "${engine}" || die "${EX_PRECOND}" "No engine module for '${engine}'"
       local fn="db_${engine}_restore"
       declare -F "${fn}" >/dev/null 2>&1 || die "${EX_PRECOND}" "Engine '${engine}' cannot restore"
       warn "This will load the dump into the LIVE container '${container}'."
       confirm "Continue?" || return "${EX_SAFETY}"
-      restic_exec dump "${snap}" "/${path}" | "${fn}" "${container}" ;;
+      restic_exec dump "${snap}" "/${path}" | "${fn}" "${container}"
+      ;;
   esac
 }
 
@@ -573,7 +724,11 @@ cmd_dump() {
   local snap="${1:-}" path="${2:-}" out=""
   shift 2 2>/dev/null || true
   while [ $# -gt 0 ]; do
-    case "$1" in --to) out="$2"; shift 2 ;; *) shift ;; esac
+    case "$1" in --to)
+      out="$2"
+      shift 2
+      ;;
+    *) shift ;; esac
   done
   [ -n "${snap}" ] && [ -n "${path}" ] || die "${EX_USAGE}" "usage: bg-backup dump <snapshot|latest> <path> [--to FILE]"
 

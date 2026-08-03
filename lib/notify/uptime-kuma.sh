@@ -41,13 +41,14 @@ _BGB_NOTIFY_KUMA_SOURCED=1
 # the operator, and there is no risk of a false green in that direction.
 _kuma_push_status() {
   case "${1:-}" in
-    success)                 printf 'up' ;;
+    success) printf 'up' ;;
     partial)
       # A partial run produced a restorable snapshot. Whether that is "up"
       # depends on the same switch that decides whether a human is woken.
-      if [ "${JOB_PARTIAL_IS_FAILURE:-0}" = "1" ]; then printf 'down'; else printf 'up'; fi ;;
-    failure|degraded|check_failed|verify_failed) printf 'down' ;;
-    *)                       printf 'skip' ;;
+      if [ "${JOB_PARTIAL_IS_FAILURE:-0}" = "1" ]; then printf 'down'; else printf 'up'; fi
+      ;;
+    failure | degraded | check_failed | verify_failed) printf 'down' ;;
+    *) printf 'skip' ;;
   esac
 }
 
@@ -116,9 +117,9 @@ bgb_kuma_maintenance() {
   [ -n "${BGB_MONITOR_KUMA_MAINTENANCE_ID:-}" ] || return 0
 
   case "${action}" in
-    on)  endpoint="resume" ;;
+    on) endpoint="resume" ;;
     off) endpoint="pause" ;;
-    *)   return 0 ;;
+    *) return 0 ;;
   esac
 
   conf="$(monitor_curl_conf_new)"

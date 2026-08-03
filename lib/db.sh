@@ -67,9 +67,13 @@ db_load_engine() {
     [ "${e}" = "${engine}" ] && return 0
   done
 
-  local file; file="$(db_engine_module "${engine}")"
+  local file
+  file="$(db_engine_module "${engine}")"
   f="${BGB_SHARE_DIR}/db/${file}.sh"
-  [ -r "${f}" ] || { debug "No engine module for '${engine}' at ${f}"; return 1; }
+  [ -r "${f}" ] || {
+    debug "No engine module for '${engine}' at ${f}"
+    return 1
+  }
   # shellcheck source=/dev/null
   . "${f}"
   _BGB_DB_LOADED_ENGINES+=("${engine}")
@@ -81,9 +85,9 @@ db_load_engine() {
 # being hard-coded at every call site.
 db_engine_module() {
   case "$1" in
-    mariadb|percona) printf 'mysql' ;;
-    opensearch)      printf 'elasticsearch' ;;
-    *)               printf '%s' "$1" ;;
+    mariadb | percona) printf 'mysql' ;;
+    opensearch) printf 'elasticsearch' ;;
+    *) printf '%s' "$1" ;;
   esac
 }
 
@@ -110,7 +114,8 @@ db_detect() {
 
   engine="$(db_container_label "${c}" engine)"
   if [ -n "${engine}" ]; then
-    printf '%s' "${engine}"; return 0
+    printf '%s' "${engine}"
+    return 0
   fi
 
   for engine in ${BGB_DB_ENGINES_KNOWN}; do
@@ -118,7 +123,8 @@ db_detect() {
     local fn="db_${engine}_detect"
     declare -F "${fn}" >/dev/null 2>&1 || continue
     if "${fn}" "${c}" 2>/dev/null; then
-      printf '%s' "${engine}"; return 0
+      printf '%s' "${engine}"
+      return 0
     fi
   done
   return 1
@@ -152,7 +158,8 @@ db_container_name() {
 }
 
 db_container_tier() {
-  local t; t="$(db_container_label "$1" tier)"
+  local t
+  t="$(db_container_label "$1" tier)"
   printf '%s' "${t:-standard}"
 }
 
@@ -165,9 +172,15 @@ db_plan() {
   local c engine name tier
   while IFS= read -r c; do
     [ -n "${c}" ] || continue
-    db_container_excluded "${c}" && { debug "Excluded: $(db_container_name "${c}")"; continue; }
+    db_container_excluded "${c}" && {
+      debug "Excluded: $(db_container_name "${c}")"
+      continue
+    }
     engine="$(db_detect "${c}")" || continue
-    db_engine_enabled "${engine}" || { debug "Engine '${engine}' not enabled for this job"; continue; }
+    db_engine_enabled "${engine}" || {
+      debug "Engine '${engine}' not enabled for this job"
+      continue
+    }
     name="$(db_container_name "${c}")"
     tier="$(db_container_tier "${c}")"
     printf '%s\t%s\t%s\t%s\n' "${c}" "${name}" "${engine}" "${tier}"
@@ -208,7 +221,7 @@ db_dump_all() {
     fi
 
     log "Dumping ${engine} from container '${name}' (tier=${tier})"
-    count=$(( count + 1 ))
+    count=$((count + 1))
     rc=0
     db_result_reset
 
@@ -227,9 +240,15 @@ db_dump_all() {
     local outcome="${BGB_DB_RESULT:-}"
     if [ -z "${outcome}" ]; then
       case "${rc}" in
-        0)       outcome="ok" ;;
-        124|137) outcome="failed"; BGB_DB_RESULT_REASON="timed out after ${JOB_DB_DUMP_TIMEOUT}s" ;;
-        *)       outcome="failed"; BGB_DB_RESULT_REASON="dump command exited ${rc}" ;;
+        0) outcome="ok" ;;
+        124 | 137)
+          outcome="failed"
+          BGB_DB_RESULT_REASON="timed out after ${JOB_DB_DUMP_TIMEOUT}s"
+          ;;
+        *)
+          outcome="failed"
+          BGB_DB_RESULT_REASON="dump command exited ${rc}"
+          ;;
       esac
     fi
 
@@ -241,7 +260,7 @@ db_dump_all() {
         ;;
       skipped)
         log "Skipped '${name}': ${BGB_DB_RESULT_REASON:-no reason given}"
-        count=$(( count - 1 ))
+        count=$((count - 1))
         ;;
       degraded)
         # The dump exists but its consistency is not guaranteed. Reported, never
@@ -253,7 +272,7 @@ db_dump_all() {
       *)
         err "Dump of '${name}' FAILED: ${BGB_DB_RESULT_REASON:-rc=${rc}}"
         [ -n "${BGB_DB_LAST_LOG}" ] && err "  see ${BGB_DB_LAST_LOG}"
-        failed=$(( failed + 1 ))
+        failed=$((failed + 1))
         # Critical tier or not, a failed dump fails the run. The tier only
         # changes how loudly it is reported, not whether it counts: a backup
         # that quietly lost one database is the failure mode with the longest
@@ -292,10 +311,14 @@ db_record_counts() {
   install -d -m 0700 /var/lib/bg-backup/facts
   {
     printf '{'
-    json_kv container "${name}"; printf ','
-    json_kv engine "${engine}"; printf ','
-    json_kv run_id "${run_id}"; printf ','
-    json_kv captured "$(now_iso)"; printf ','
+    json_kv container "${name}"
+    printf ','
+    json_kv engine "${engine}"
+    printf ','
+    json_kv run_id "${run_id}"
+    printf ','
+    json_kv captured "$(now_iso)"
+    printf ','
     json_kvraw counts "${counts}"
     printf '}\n'
   } | atomic_write "${out}" 0600
@@ -310,8 +333,10 @@ db_record_counts() {
 # The single place that builds the restic invocation, so no engine module can
 # accidentally use --stdin instead of --stdin-from-command.
 db_stream_dump() {
-  local container="$1" job="$2" run_id="$3" engine="$4" filename="$5"; shift 5
-  local name; name="$(db_container_name "${container}")"
+  local container="$1" job="$2" run_id="$3" engine="$4" filename="$5"
+  shift 5
+  local name
+  name="$(db_container_name "${container}")"
 
   local -a args=(
     backup
@@ -340,12 +365,14 @@ db_stream_dump() {
 # environment (POSTGRES_USER, MYSQL_ROOT_PASSWORD, ...) can be referenced. That
 # is deliberate: it means bg-backup never has to store a database credential.
 db_exec() {
-  local c="$1"; shift
+  local c="$1"
+  shift
   docker exec -i "${c}" sh -c "$*"
 }
 
 db_exec_quiet() {
-  local c="$1"; shift
+  local c="$1"
+  shift
   docker exec -i "${c}" sh -c "$*" 2>/dev/null
 }
 

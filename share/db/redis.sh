@@ -67,7 +67,8 @@ EOS
 
 # _db_redis_cli <container> <redis-cli args...>
 _db_redis_cli() {
-  local c="$1"; shift
+  local c="$1"
+  shift
   docker exec -i "${c}" sh -c "${_DB_RD_CLI_SH}" _ "$@" 2>/dev/null
 }
 
@@ -99,20 +100,20 @@ db_redis_detect() {
   [ -n "${image}" ] || return 1
 
   case "${image}" in
-    *exporter*|*redisinsight*|*commander*|*sentinel*) return 1 ;;
+    *exporter* | *redisinsight* | *commander* | *sentinel*) return 1 ;;
   esac
   case "${image}" in
-    *redis*|*valkey*|*keydb*|*dragonfly*) : ;;
+    *redis* | *valkey* | *keydb* | *dragonfly*) : ;;
     *) return 1 ;;
   esac
 
   if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${c}" 2>/dev/null \
-     | cut -d= -f1 \
-     | grep -qxE 'REDIS_PASSWORD|REDIS_ARGS|REDIS_AOF_ENABLED|REDISCLI_AUTH|VALKEY_PASSWORD|KEYDB_PASSWORD|ALLOW_EMPTY_PASSWORD'; then
+    | cut -d= -f1 \
+    | grep -qxE 'REDIS_PASSWORD|REDIS_ARGS|REDIS_AOF_ENABLED|REDISCLI_AUTH|VALKEY_PASSWORD|KEYDB_PASSWORD|ALLOW_EMPTY_PASSWORD'; then
     return 0
   fi
   if docker inspect --format '{{range $p, $v := .Config.ExposedPorts}}{{println $p}}{{end}}' "${c}" 2>/dev/null \
-     | grep -qxE '6379/tcp|6380/tcp'; then
+    | grep -qxE '6379/tcp|6380/tcp'; then
     return 0
   fi
   return 1
@@ -137,7 +138,8 @@ _db_redis_argv() {
 # `-t` would be especially fatal here: an RDB file is binary and a pty would
 # rewrite every 0x0a byte in it.
 _db_redis_run() {
-  local job="$1" run="$2" name="$3" tag="$4"; shift 4
+  local job="$1" run="$2" name="$3" tag="$4"
+  shift 4
   [ "${1:-}" = "--" ] && shift
 
   local log rc=0
@@ -147,12 +149,12 @@ _db_redis_run() {
   mapfile -t argv < <(_db_redis_argv "${job}" "${run}" "${name}" "${tag}")
   argv+=(timeout "${JOB_DB_DUMP_TIMEOUT:-3600}" "$@")
 
-  BGB_RUN_DB_DUMPS=$(( ${BGB_RUN_DB_DUMPS:-0} + 1 ))
+  BGB_RUN_DB_DUMPS=$((${BGB_RUN_DB_DUMPS:-0} + 1))
   restic_exec_logged "${log}" "${argv[@]}" || rc=$?
   BGB_DB_LAST_LOG="${log}"
 
   if [ "${rc}" -ne 0 ]; then
-    BGB_RUN_DB_DUMPS_FAILED=$(( ${BGB_RUN_DB_DUMPS_FAILED:-0} + 1 ))
+    BGB_RUN_DB_DUMPS_FAILED=$((${BGB_RUN_DB_DUMPS_FAILED:-0} + 1))
     err "redis: ${name} failed (restic rc=${rc}: $(restic_explain_rc "${rc}"))"
     return "${EX_FAIL}"
   fi
@@ -190,19 +192,21 @@ db_redis_dump() {
   ping="$(_db_redis_cli "${c}" PING | tr -d '\r' | head -n1 || true)"
   case "${ping}" in
     PONG) : ;;
-    *NOAUTH*|*WRONGPASS*)
+    *NOAUTH* | *WRONGPASS*)
       BGB_DB_RESULT="refused"
       BGB_DB_RESULT_REASON="authentication required and no password in the container environment"
       err "redis: ${c}: the server requires authentication but no REDIS_PASSWORD is set in its environment"
       err "redis: the password is presumably in the command line (--requirepass) or a config file."
       err "redis: add REDIS_PASSWORD=<same value> to the container environment so bg-backup can read it"
       err "redis: from inside the container without ever storing it itself."
-      return "${EX_PRECOND}" ;;
+      return "${EX_PRECOND}"
+      ;;
     *)
       BGB_DB_RESULT="failed"
       BGB_DB_RESULT_REASON="server did not answer PING"
       err "redis: ${c}: no PONG (got '${ping:-<nothing>}')"
-      return "${EX_FAIL}" ;;
+      return "${EX_FAIL}"
+      ;;
   esac
 
   # --- Is this a cache or a database? ----------------------------------------
@@ -232,7 +236,7 @@ db_redis_dump() {
 
   # --- BGSAVE and wait for the real completion signal ------------------------
   before="$(_db_redis_cli "${c}" LASTSAVE | tr -d '\r' | head -n1 || true)"
-  case "${before}" in ''|*[!0-9]*) before=0 ;; esac
+  case "${before}" in '' | *[!0-9]*) before=0 ;; esac
 
   if [ "${BGB_DRY_RUN}" = "1" ]; then
     log "[dry-run] redis: BGSAVE on ${c}"
@@ -240,20 +244,21 @@ db_redis_dump() {
     local bg
     bg="$(_db_redis_cli "${c}" BGSAVE | tr -d '\r' | head -n1 || true)"
     case "${bg}" in
-      *"Background saving started"*|*"scheduled"*) debug "redis: ${bg}" ;;
+      *"Background saving started"* | *"scheduled"*) debug "redis: ${bg}" ;;
       *"already in progress"*) debug "redis: a save was already running - waiting for it" ;;
       *)
         BGB_DB_RESULT="failed"
         BGB_DB_RESULT_REASON="BGSAVE was refused"
         err "redis: ${c}: BGSAVE refused: ${bg:-<no reply>}"
-        return "${EX_FAIL}" ;;
+        return "${EX_FAIL}"
+        ;;
     esac
 
     while :; do
       inprog="$(_db_redis_info_field "${c}" persistence rdb_bgsave_in_progress || true)"
       after="$(_db_redis_cli "${c}" LASTSAVE | tr -d '\r' | head -n1 || true)"
       status="$(_db_redis_info_field "${c}" persistence rdb_last_bgsave_status || true)"
-      case "${after}" in ''|*[!0-9]*) after=0 ;; esac
+      case "${after}" in '' | *[!0-9]*) after=0 ;; esac
 
       if [ "${inprog}" = "0" ] && [ "${after}" -gt "${before}" ]; then
         if [ "${status}" = "ok" ]; then break; fi
@@ -264,7 +269,7 @@ db_redis_dump() {
         return "${EX_FAIL}"
       fi
 
-      waited=$(( waited + 2 ))
+      waited=$((waited + 2))
       if [ "${waited}" -ge "${BGB_DB_REDIS_SAVE_TIMEOUT:-900}" ]; then
         BGB_DB_RESULT="failed"
         BGB_DB_RESULT_REASON="BGSAVE did not complete within ${waited}s"
@@ -319,11 +324,16 @@ db_redis_counts() {
   [ -n "${raw}" ] || return 0
 
   printf '{'
-  json_kv engine redis; printf ','
-  json_kv container "${c}"; printf ','
-  json_kv taken "$(now_iso)"; printf ','
-  json_kv source "info-keyspace"; printf ','
-  json_kvraw exact false; printf ','
+  json_kv engine redis
+  printf ','
+  json_kv container "${c}"
+  printf ','
+  json_kv taken "$(now_iso)"
+  printf ','
+  json_kv source "info-keyspace"
+  printf ','
+  json_kvraw exact false
+  printf ','
   printf '"objects":{'
   while IFS= read -r line; do
     case "${line}" in db[0-9]*:keys=*) : ;; *) continue ;; esac
@@ -379,7 +389,10 @@ db_redis_restore() {
     return 0
   fi
 
-  docker stop "${c}" >/dev/null || { err "redis: could not stop ${c}"; return "${EX_FAIL}"; }
+  docker stop "${c}" >/dev/null || {
+    err "redis: could not stop ${c}"
+    return "${EX_FAIL}"
+  }
   docker cp "${spool}" "${c}:${dir%/}/${file}" || rc=$?
   docker start "${c}" >/dev/null || rc=$?
 

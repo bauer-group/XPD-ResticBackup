@@ -37,7 +37,7 @@ db_clickhouse_detect() {
   image="$(printf '%s' "${image}" | tr '[:upper:]' '[:lower:]')"
   [ -n "${image}" ] || return 1
 
-  case "${image}" in *exporter*|*keeper*|*tabix*) return 1 ;; esac
+  case "${image}" in *exporter* | *keeper* | *tabix*) return 1 ;; esac
   case "${image}" in *clickhouse*) : ;; *) return 1 ;; esac
 
   docker inspect --format '{{range $p, $v := .Config.ExposedPorts}}{{println $p}}{{end}}' "${c}" 2>/dev/null \
@@ -85,7 +85,8 @@ _db_ch_databases() {
 # Dump
 # -----------------------------------------------------------------------------
 _db_ch_run() {
-  local job="$1" run="$2" name="$3" tag="$4"; shift 4
+  local job="$1" run="$2" name="$3" tag="$4"
+  shift 4
   [ "${1:-}" = "--" ] && shift
   local log rc=0
   log="$(tmp_file "db-clickhouse-XXXXXX")"
@@ -103,11 +104,11 @@ _db_ch_run() {
   )
   argv+=(timeout "${JOB_DB_DUMP_TIMEOUT:-3600}" "$@")
 
-  BGB_RUN_DB_DUMPS=$(( ${BGB_RUN_DB_DUMPS:-0} + 1 ))
+  BGB_RUN_DB_DUMPS=$((${BGB_RUN_DB_DUMPS:-0} + 1))
   restic_exec_logged "${log}" "${argv[@]}" || rc=$?
   BGB_DB_LAST_LOG="${log}"
   if [ "${rc}" -ne 0 ]; then
-    BGB_RUN_DB_DUMPS_FAILED=$(( ${BGB_RUN_DB_DUMPS_FAILED:-0} + 1 ))
+    BGB_RUN_DB_DUMPS_FAILED=$((${BGB_RUN_DB_DUMPS_FAILED:-0} + 1))
     err "clickhouse: ${name} failed (restic rc=${rc}: $(restic_explain_rc "${rc}"))"
     return "${EX_FAIL}"
   fi
@@ -199,7 +200,7 @@ _db_ch_dump_tables() {
   rc=0
   _db_ch_run "${job}" "${run}" "/db/clickhouse/${c}/schema.sql" "kind=schema" \
     -- docker exec -i "${c}" sh -c "${_DB_CH_CLIENT_SH}" _ --query \
-       "SELECT create_table_query || ';' FROM system.tables
+    "SELECT create_table_query || ';' FROM system.tables
         WHERE database NOT IN ('system','INFORMATION_SCHEMA','information_schema')
         FORMAT TabSeparatedRaw" || rc=$?
   worst="$(worst_rc "${worst}" "${rc}")"
@@ -211,7 +212,7 @@ _db_ch_dump_tables() {
     rc=0
     _db_ch_run "${job}" "${run}" "/db/clickhouse/${c}/${safe}.native" "table=${safe}" \
       -- docker exec -i "${c}" sh -c "${_DB_CH_CLIENT_SH}" _ --query \
-         "SELECT * FROM ${t} FORMAT Native" || rc=$?
+      "SELECT * FROM ${t} FORMAT Native" || rc=$?
     worst="$(worst_rc "${worst}" "${rc}")"
   done
 

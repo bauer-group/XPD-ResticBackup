@@ -34,7 +34,7 @@ _bg_backup() {
 
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev=""
-  [ "${COMP_CWORD}" -gt 0 ] && prev="${COMP_WORDS[COMP_CWORD-1]}"
+  [ "${COMP_CWORD}" -gt 0 ] && prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
   commands="init discover doctor backup schedule status logs restore dump
             snapshots ls find diff mount runs check verify forget prune copy
@@ -55,17 +55,23 @@ _bg_backup() {
                       --recipients-file --token --unit --exclude "
 
   # --- locate the command and subcommand words -------------------------------
-  cmd=""; sub=""; skip=0
-  for (( i=1; i < COMP_CWORD; i++ )); do
+  cmd=""
+  sub=""
+  skip=0
+  for ((i = 1; i < COMP_CWORD; i++)); do
     word="${COMP_WORDS[i]}"
-    if [ "${skip}" -eq 1 ]; then skip=0; continue; fi
+    if [ "${skip}" -eq 1 ]; then
+      skip=0
+      continue
+    fi
     case "${word}" in
       --*=*) continue ;;
       -*)
         case "${value_flags}" in
           *" ${word} "*) skip=1 ;;
         esac
-        continue ;;
+        continue
+        ;;
     esac
     if [ -z "${cmd}" ]; then
       cmd="${word}"
@@ -78,8 +84,9 @@ _bg_backup() {
   case "${prev}" in
     --job)
       mapfile -t COMPREPLY < <(compgen -W "$(_bg_backup_jobs)" -- "${cur}")
-      return 0 ;;
-    --config|--out|--in|--password-file|--passphrase-file|--recipients-file|--bundle|--generate-script|--to|--target)
+      return 0
+      ;;
+    --config | --out | --in | --password-file | --passphrase-file | --recipients-file | --bundle | --generate-script | --to | --target)
       # Hand back to readline's own filename completion: it knows about
       # directories, trailing slashes and quoting, and re-implementing that here
       # only produces a worse version of it.
@@ -87,25 +94,31 @@ _bg_backup() {
         compopt -o default 2>/dev/null || true
       fi
       COMPREPLY=()
-      return 0 ;;
+      return 0
+      ;;
     --color)
       mapfile -t COMPREPLY < <(compgen -W "auto always never" -- "${cur}")
-      return 0 ;;
+      return 0
+      ;;
     --profile)
       case "${cmd}" in
         restore) mapfile -t COMPREPLY < <(compgen -W "safe staged full" -- "${cur}") ;;
-        *)       mapfile -t COMPREPLY < <(compgen -W "minimal server docker" -- "${cur}") ;;
+        *) mapfile -t COMPREPLY < <(compgen -W "minimal server docker" -- "${cur}") ;;
       esac
-      return 0 ;;
+      return 0
+      ;;
     --phase)
       mapfile -t COMPREPLY < <(compgen -W "system docker databases all" -- "${cur}")
-      return 0 ;;
+      return 0
+      ;;
     --overwrite)
       mapfile -t COMPREPLY < <(compgen -W "if-newer always never" -- "${cur}")
-      return 0 ;;
+      return 0
+      ;;
     --into)
       mapfile -t COMPREPLY < <(compgen -W "container scratch -" -- "${cur}")
-      return 0 ;;
+      return 0
+      ;;
   esac
 
   # --- the command word itself ------------------------------------------------
@@ -126,27 +139,31 @@ _bg_backup() {
       if [ "${cur:0:1}" != "-" ]; then
         mapfile -t COMPREPLY < <(compgen -W "--all $(_bg_backup_jobs)" -- "${cur}")
         return 0
-      fi ;;
-    logs|status)
+      fi
+      ;;
+    logs | status)
       if [ "${cur:0:1}" != "-" ]; then
         mapfile -t COMPREPLY < <(compgen -W "$(_bg_backup_jobs)" -- "${cur}")
         return 0
       fi
-      opts="--follow --lines --json ${global_flags}" ;;
+      opts="--follow --lines --json ${global_flags}"
+      ;;
     schedule)
       if [ -z "${sub}" ]; then
         mapfile -t COMPREPLY < <(compgen -W "enable disable list sync" -- "${cur}")
         return 0
       fi
       case "${sub}" in
-        enable|disable)
+        enable | disable)
           if [ "${cur:0:1}" != "-" ]; then
             mapfile -t COMPREPLY < <(compgen -W "$(_bg_backup_jobs)" -- "${cur}")
             return 0
-          fi ;;
+          fi
+          ;;
         list) opts="--json" ;;
       esac
-      opts="${opts} ${global_flags}" ;;
+      opts="${opts} ${global_flags}"
+      ;;
     restore)
       if [ -z "${sub}" ]; then
         mapfile -t COMPREPLY < <(compgen -W "file dir volume project db system preview commit rollback" -- "${cur}")
@@ -154,62 +171,80 @@ _bg_backup() {
       fi
       opts="--path --name --db --into --run --at --snapshot --job --to --in-place
             --force-unsafe --overwrite --verify --generate-script --profile
-            --config-only --recreate --swap --token --dry-run ${global_flags}" ;;
+            --config-only --recreate --swap --token --dry-run ${global_flags}"
+      ;;
     runs)
       if [ -z "${sub}" ]; then
         mapfile -t COMPREPLY < <(compgen -W "list show diff" -- "${cur}")
         return 0
       fi
-      opts="--job --json ${global_flags}" ;;
+      opts="--job --json ${global_flags}"
+      ;;
     config)
       if [ -z "${sub}" ]; then
         mapfile -t COMPREPLY < <(compgen -W "show validate edit export import" -- "${cur}")
         return 0
       fi
       opts="--job --resolved --reveal --strict --out --in --passphrase-file
-            --recipients-file --force --json ${global_flags}" ;;
+            --recipients-file --force --json ${global_flags}"
+      ;;
     secrets)
       if [ -z "${sub}" ]; then
         mapfile -t COMPREPLY < <(compgen -W "show rotate-repo-password print-recovery-card" -- "${cur}")
         return 0
       fi
-      opts="--json ${global_flags}" ;;
+      opts="--json ${global_flags}"
+      ;;
     dr)
       if [ -z "${sub}" ]; then
         mapfile -t COMPREPLY < <(compgen -W "bootstrap plan run verify bare-metal" -- "${cur}")
         return 0
       fi
       opts="--bundle --bundle-url --repo --password-file --run --phase --target
-            --out --json --dry-run ${global_flags}" ;;
+            --out --json --dry-run ${global_flags}"
+      ;;
     completion)
       mapfile -t COMPREPLY < <(compgen -W "bash" -- "${cur}")
-      return 0 ;;
+      return 0
+      ;;
     help)
       mapfile -t COMPREPLY < <(compgen -W "${commands}" -- "${cur}")
-      return 0 ;;
+      return 0
+      ;;
     init)
       opts="--repo --password-file --generate-password --s3-key --s3-secret
-            --s3-region --profile --non-interactive --force ${global_flags}" ;;
+            --s3-region --profile --non-interactive --force ${global_flags}"
+      ;;
     doctor)
-      opts="--json --fix ${global_flags}" ;;
+      opts="--json --fix ${global_flags}"
+      ;;
     discover)
-      opts="--write --json ${global_flags}" ;;
+      opts="--write --json ${global_flags}"
+      ;;
     verify)
-      opts="--job --sample --full --databases --json ${global_flags}" ;;
+      opts="--job --sample --full --databases --json ${global_flags}"
+      ;;
     check)
-      opts="--read-data --read-data-subset --json ${global_flags}" ;;
+      opts="--read-data --read-data-subset --json ${global_flags}"
+      ;;
     forget)
-      opts="--job --apply --dry-run --json ${global_flags}" ;;
-    prune|copy|unlock|stats)
-      opts="--job --json ${global_flags}" ;;
-    snapshots|ls|find|diff|mount|dump)
-      opts="--job --tag --host --json ${global_flags}" ;;
+      opts="--job --apply --dry-run --json ${global_flags}"
+      ;;
+    prune | copy | unlock | stats)
+      opts="--job --json ${global_flags}"
+      ;;
+    snapshots | ls | find | diff | mount | dump)
+      opts="--job --tag --host --json ${global_flags}"
+      ;;
     self-update)
-      opts="--channel --version --restic --rollback --check ${global_flags}" ;;
+      opts="--channel --version --restic --rollback --check ${global_flags}"
+      ;;
     uninstall)
-      opts="--purge --yes ${global_flags}" ;;
+      opts="--purge --yes ${global_flags}"
+      ;;
     *)
-      opts="${global_flags}" ;;
+      opts="${global_flags}"
+      ;;
   esac
 
   mapfile -t COMPREPLY < <(compgen -W "${opts}" -- "${cur}")

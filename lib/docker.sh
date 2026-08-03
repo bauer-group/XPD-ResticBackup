@@ -67,7 +67,7 @@ docker_container_json() {
 docker_container_mounts() {
   docker inspect "$1" 2>/dev/null \
     | jq -r '.[0].Mounts[]? | [.Type, (.Source // ""), (.Destination // ""), (.Name // "")] | @tsv' \
-    2>/dev/null || true
+      2>/dev/null || true
 }
 
 # docker_volume_mountpoint <name>
@@ -106,10 +106,14 @@ docker_write_manifest() {
 
   {
     printf '{'
-    json_kv generated "$(now_iso)"; printf ','
-    json_kv host "${BGB_HOSTNAME}"; printf ','
-    json_kv docker_version "$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)"; printf ','
-    json_kvraw storage_driver "$(json_str "$(docker info --format '{{.Driver}}' 2>/dev/null || echo unknown)")"; printf ','
+    json_kv generated "$(now_iso)"
+    printf ','
+    json_kv host "${BGB_HOSTNAME}"
+    printf ','
+    json_kv docker_version "$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)"
+    printf ','
+    json_kvraw storage_driver "$(json_str "$(docker info --format '{{.Driver}}' 2>/dev/null || echo unknown)")"
+    printf ','
 
     printf '"projects":['
     local first_p=1
@@ -131,7 +135,7 @@ docker_write_manifest() {
         | jq -c '.[0] | {name: .Name, driver: .Driver, scope: .Scope,
                          internal: .Internal, attachable: .Attachable,
                          ipam: .IPAM, labels: .Labels, options: .Options}' \
-        2>/dev/null || printf '{}'
+          2>/dev/null || printf '{}'
     done < <(docker network ls --format '{{.Name}}' 2>/dev/null | grep -vx 'bridge\|host\|none' || true)
     printf '],'
 
@@ -144,7 +148,7 @@ docker_write_manifest() {
       docker volume inspect "${v}" 2>/dev/null \
         | jq -c '.[0] | {name: .Name, driver: .Driver, options: .Options,
                          labels: .Labels, mountpoint: .Mountpoint}' \
-        2>/dev/null || printf '{}'
+          2>/dev/null || printf '{}'
     done < <(docker volume ls --format '{{.Name}}' 2>/dev/null || true)
     printf ']'
     printf '}\n'
@@ -156,10 +160,13 @@ docker_write_manifest() {
 docker_project_manifest() {
   local project="$1" projects="$2" c
   printf '{'
-  json_kv name "${project}"; printf ','
+  json_kv name "${project}"
+  printf ','
   json_kvraw config_files "$(printf '%s' "${projects}" \
-    | jq -c --arg n "${project}" '[.[] | select(.Name==$n) | .ConfigFiles] | .[0] // "" | split(",")' 2>/dev/null || printf '[]')"; printf ','
-  json_kv status "$(printf '%s' "${projects}" | jq -r --arg n "${project}" '.[] | select(.Name==$n) | .Status // ""')"; printf ','
+    | jq -c --arg n "${project}" '[.[] | select(.Name==$n) | .ConfigFiles] | .[0] // "" | split(",")' 2>/dev/null || printf '[]')"
+  printf ','
+  json_kv status "$(printf '%s' "${projects}" | jq -r --arg n "${project}" '.[] | select(.Name==$n) | .Status // ""')"
+  printf ','
 
   printf '"containers":['
   local first=1
@@ -175,7 +182,8 @@ docker_project_manifest() {
     # image_id is the LOCAL image config ID. It identifies nothing a fresh host
     # can obtain, so a restore that had only that would fall back to pulling the
     # tag and silently start a different version than the data was written by.
-    local _ref; _ref="$(docker_image_ref "${c}")"
+    local _ref
+    _ref="$(docker_image_ref "${c}")"
     docker inspect "${c}" 2>/dev/null | jq -c --arg ref "${_ref}" '.[0] | {
       id: .Id[0:12],
       name: (.Name | ltrimstr("/")),
@@ -211,9 +219,9 @@ docker_collect_paths() {
     while IFS= read -r c; do
       [ -n "${c}" ] || continue
       cf="$(docker inspect "${c}" 2>/dev/null \
-            | jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // empty')"
+        | jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // empty')"
       dir="$(docker inspect "${c}" 2>/dev/null \
-            | jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // empty')"
+        | jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // empty')"
       [ -n "${dir}" ] && [ -d "${dir}" ] && printf '%s\n' "${dir}"
       local f
       IFS=',' read -r -a __cfs <<<"${cf}"
@@ -240,9 +248,10 @@ docker_collect_paths() {
           # mounting /etc or / into a container must not silently double the
           # backup or pull in paths the system job already excludes.
           case "${src}" in
-            /|/etc|/usr|/var|/var/lib|/var/lib/docker|/proc|/sys|/dev|/run)
+            / | /etc | /usr | /var | /var/lib | /var/lib/docker | /proc | /sys | /dev | /run)
               warn "Skipping suspicious bind mount source: ${src} (container ${c:0:12})"
-              continue ;;
+              continue
+              ;;
           esac
           [ -e "${src}" ] && printf '%s\n' "${src}"
           ;;
@@ -257,7 +266,8 @@ docker_collect_paths() {
 # Backup
 # -----------------------------------------------------------------------------
 docker_backup_run() {
-  local job="$1" run_id="$2"; shift 2
+  local job="$1" run_id="$2"
+  shift 2
   local -a extra_tags=("$@")
   local rc=0 worst=0 project
 
@@ -350,7 +360,8 @@ docker_backup_run() {
   done
   args+=("${paths[@]}")
 
-  local jsonl; jsonl="$(tmp_file "docker.XXXXXX.jsonl")"
+  local jsonl
+  jsonl="$(tmp_file "docker.XXXXXX.jsonl")"
   log "Backing up ${#paths[@]} Docker path(s)"
   rc=0
   set +e
@@ -415,15 +426,15 @@ docker_warn_local_images() {
     [ -n "${tag}" ] || continue
     if ! docker_image_has_digest "${tag}"; then
       warn "Image '${tag}' has no registry digest (built locally, never pushed)"
-      missing=$(( missing + 1 ))
+      missing=$((missing + 1))
     fi
   done < <(docker ps -q 2>/dev/null || true)
 
   if [ "${missing}" -gt 0 ]; then
     warn "${missing} running container(s) use an image that exists only on this host."
     warn "They cannot be pulled during a restore. JOB_DOCKER_EXPORT_IMAGES=${JOB_DOCKER_EXPORT_IMAGES}"
-    [ "${JOB_DOCKER_EXPORT_IMAGES}" = "none" ] && \
-      warn "With EXPORT_IMAGES=none these stacks are NOT restorable. Set it to 'missing'."
+    [ "${JOB_DOCKER_EXPORT_IMAGES}" = "none" ] \
+      && warn "With EXPORT_IMAGES=none these stacks are NOT restorable. Set it to 'missing'."
   fi
 }
 
@@ -440,7 +451,8 @@ docker_export_images() {
       continue
     fi
 
-    local safe; safe="$(printf '%s' "${tag}" | tr -c 'A-Za-z0-9._-' '_')"
+    local safe
+    safe="$(printf '%s' "${tag}" | tr -c 'A-Za-z0-9._-' '_')"
     log "Exporting image ${tag} into the repository"
     # --stdin-from-command so a failing `docker save` aborts instead of storing
     # a truncated tar that looks like a valid backup.

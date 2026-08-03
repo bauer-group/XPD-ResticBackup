@@ -37,9 +37,9 @@ db_mssql_detect() {
   image="$(printf '%s' "${image}" | tr '[:upper:]' '[:lower:]')"
   [ -n "${image}" ] || return 1
 
-  case "${image}" in *exporter*|*tools*) return 1 ;; esac
+  case "${image}" in *exporter* | *tools*) return 1 ;; esac
   case "${image}" in
-    *mssql*|*sqlserver*|*sql-server*) : ;;
+    *mssql* | *sqlserver* | *sql-server*) : ;;
     *) return 1 ;;
   esac
 
@@ -153,7 +153,8 @@ db_mssql_dump() {
 }
 
 _db_mssql_run() {
-  local job="$1" run="$2" name="$3" tag="$4"; shift 4
+  local job="$1" run="$2" name="$3" tag="$4"
+  shift 4
   [ "${1:-}" = "--" ] && shift
   local log rc=0
   log="$(tmp_file "db-mssql-XXXXXX")"
@@ -171,11 +172,11 @@ _db_mssql_run() {
   )
   argv+=(timeout "${JOB_DB_DUMP_TIMEOUT:-3600}" "$@")
 
-  BGB_RUN_DB_DUMPS=$(( ${BGB_RUN_DB_DUMPS:-0} + 1 ))
+  BGB_RUN_DB_DUMPS=$((${BGB_RUN_DB_DUMPS:-0} + 1))
   restic_exec_logged "${log}" "${argv[@]}" || rc=$?
   BGB_DB_LAST_LOG="${log}"
   if [ "${rc}" -ne 0 ]; then
-    BGB_RUN_DB_DUMPS_FAILED=$(( ${BGB_RUN_DB_DUMPS_FAILED:-0} + 1 ))
+    BGB_RUN_DB_DUMPS_FAILED=$((${BGB_RUN_DB_DUMPS_FAILED:-0} + 1))
     err "mssql: ${name} failed (restic rc=${rc}: $(restic_explain_rc "${rc}"))"
     return "${EX_FAIL}"
   fi
@@ -224,7 +225,10 @@ db_mssql_counts() {
 db_mssql_restore() {
   local c="$1" db="${2:-}"
   require_cmd docker
-  [ -n "${db}" ] || { err "mssql: restore needs a database name"; return "${EX_PRECOND}"; }
+  [ -n "${db}" ] || {
+    err "mssql: restore needs a database name"
+    return "${EX_PRECOND}"
+  }
 
   # WITH MOVE is required whenever the target's data paths differ from the
   # source's, which they usually do after a rebuild. The file list is read from

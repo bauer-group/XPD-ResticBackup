@@ -41,10 +41,10 @@ db_elasticsearch_detect() {
   # Kibana, Logstash, Beats and the exporters all carry "elastic" in the name
   # and none of them hold the data.
   case "${image}" in
-    *kibana*|*logstash*|*beat*|*exporter*|*apm*|*dashboards*|*enterprise-search*) return 1 ;;
+    *kibana* | *logstash* | *beat* | *exporter* | *apm* | *dashboards* | *enterprise-search*) return 1 ;;
   esac
   case "${image}" in
-    *elasticsearch*|*opensearch*) : ;;
+    *elasticsearch* | *opensearch*) : ;;
     *) return 1 ;;
   esac
 
@@ -155,12 +155,14 @@ db_elasticsearch_dump() {
       # restorable, but it is not the whole cluster - reported, not hidden.
       db_mark_degraded "elasticsearch/${c}: snapshot state PARTIAL (some shards were unavailable)"
       BGB_DB_RESULT="degraded"
-      BGB_DB_RESULT_REASON="snapshot state PARTIAL" ;;
+      BGB_DB_RESULT_REASON="snapshot state PARTIAL"
+      ;;
     *)
       err "elasticsearch: snapshot did not succeed (state=${state:-unknown})"
       BGB_DB_RESULT="failed"
       BGB_DB_RESULT_REASON="snapshot state ${state:-unknown}"
-      return "${EX_FAIL}" ;;
+      return "${EX_FAIL}"
+      ;;
   esac
 
   # 3. Stream the repository directory into restic.
@@ -179,14 +181,14 @@ db_elasticsearch_dump() {
     printf -- '--\n'
   )
   argv+=(timeout "${JOB_DB_DUMP_TIMEOUT:-3600}"
-         docker exec -i "${c}" tar -C "${repo_path}" -cf - .)
+    docker exec -i "${c}" tar -C "${repo_path}" -cf - .)
 
-  BGB_RUN_DB_DUMPS=$(( ${BGB_RUN_DB_DUMPS:-0} + 1 ))
+  BGB_RUN_DB_DUMPS=$((${BGB_RUN_DB_DUMPS:-0} + 1))
   restic_exec_logged "${log}" "${argv[@]}" || rc=$?
   BGB_DB_LAST_LOG="${log}"
 
   if [ "${rc}" -ne 0 ]; then
-    BGB_RUN_DB_DUMPS_FAILED=$(( ${BGB_RUN_DB_DUMPS_FAILED:-0} + 1 ))
+    BGB_RUN_DB_DUMPS_FAILED=$((${BGB_RUN_DB_DUMPS_FAILED:-0} + 1))
     err "elasticsearch: storing the snapshot repository failed (rc=${rc})"
     BGB_DB_RESULT="failed"
     BGB_DB_RESULT_REASON="restic backup of the snapshot repository failed"
@@ -210,7 +212,7 @@ _db_es_prune_snapshots() {
   local c="$1" keep="${BGB_ES_KEEP_SNAPSHOTS:-3}" old
   have jq || return 0
   old="$(_db_es_curl "${c}" GET "/_snapshot/${BGB_ES_REPO_NAME}/_all" \
-        | jq -r --argjson k "${keep}" '[.snapshots[]? | select(.snapshot | startswith("bgb-"))]
+    | jq -r --argjson k "${keep}" '[.snapshots[]? | select(.snapshot | startswith("bgb-"))]
                  | sort_by(.start_time_in_millis) | .[0:-($k)] | .[].snapshot' 2>/dev/null || true)"
   local s
   while IFS= read -r s; do
@@ -241,7 +243,10 @@ db_elasticsearch_restore() {
   require_cmd docker
   local repo_path
   repo_path="$(_db_es_path_repo "${c}" || true)"
-  [ -n "${repo_path}" ] || { err "elasticsearch: path.repo is not configured on the target"; return "${EX_PRECOND}"; }
+  [ -n "${repo_path}" ] || {
+    err "elasticsearch: path.repo is not configured on the target"
+    return "${EX_PRECOND}"
+  }
 
   docker exec -i "${c}" tar -C "${repo_path}" -xf - || return "${EX_FAIL}"
 
@@ -251,8 +256,11 @@ db_elasticsearch_restore() {
 
   local latest
   latest="$(_db_es_curl "${c}" GET "/_snapshot/${BGB_ES_REPO_NAME}/_all" \
-           | jq -r '[.snapshots[]?] | sort_by(.start_time_in_millis) | last | .snapshot // empty' 2>/dev/null)"
-  [ -n "${latest}" ] || { err "elasticsearch: no snapshot found in the restored repository"; return "${EX_FAIL}"; }
+    | jq -r '[.snapshots[]?] | sort_by(.start_time_in_millis) | last | .snapshot // empty' 2>/dev/null)"
+  [ -n "${latest}" ] || {
+    err "elasticsearch: no snapshot found in the restored repository"
+    return "${EX_FAIL}"
+  }
 
   # Indices must be closed before a restore; an open index is refused.
   _db_es_curl "${c}" POST "/_all/_close" >/dev/null 2>&1 || true

@@ -45,11 +45,13 @@ lint: ## Run shellcheck over every tracked shell script
 	@test -n "$(SHELLSRC)" || { echo "no shell sources tracked yet"; exit 0; }
 	shellcheck -x -S warning -e $(SHELLCHECK_EXCLUDE) $(SHELLSRC)
 
+# $(SHELLSRC), not directory globs: `tests` holds the vendored bats submodules
+# and walking it would reformat third-party code. Same list as `lint`.
 format: ## Rewrite shell sources with shfmt
-	shfmt -i 2 -ci -bn -w bin lib share scripts tests install.sh
+	shfmt -i 2 -ci -bn -w $(SHELLSRC)
 
 format-check: ## Fail if shfmt would change anything
-	shfmt -i 2 -ci -bn -d bin lib share scripts tests install.sh
+	shfmt -i 2 -ci -bn -d $(SHELLSRC)
 
 test-unit: submodules ## Run the bats unit suite
 	$(BATS) --recursive tests/unit

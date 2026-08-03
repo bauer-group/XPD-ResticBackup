@@ -28,24 +28,24 @@ _BGB_NOTIFY_TEAMS_SOURCED=1
 # green - the names are the schema's, not ours.
 _teams_colour() {
   case "${1:-}" in
-    ok)    printf 'Good' ;;
-    warn)  printf 'Warning' ;;
+    ok) printf 'Good' ;;
+    warn) printf 'Warning' ;;
     error) printf 'Attention' ;;
-    *)     printf 'Default' ;;
+    *) printf 'Default' ;;
   esac
 }
 
 _teams_title() {
   case "${_BGB_EV_EVENT}" in
-    success)       printf 'Backup succeeded' ;;
-    partial)       printf 'Backup PARTIAL' ;;
-    degraded)      printf 'Backup DEGRADED' ;;
-    failure)       printf 'Backup FAILED' ;;
-    check_ok)      printf 'Repository check passed' ;;
-    check_failed)  printf 'Repository check FAILED' ;;
-    verify_ok)     printf 'Restore test passed' ;;
+    success) printf 'Backup succeeded' ;;
+    partial) printf 'Backup PARTIAL' ;;
+    degraded) printf 'Backup DEGRADED' ;;
+    failure) printf 'Backup FAILED' ;;
+    check_ok) printf 'Repository check passed' ;;
+    check_failed) printf 'Repository check FAILED' ;;
+    verify_ok) printf 'Restore test passed' ;;
     verify_failed) printf 'Restore test FAILED' ;;
-    *)             printf 'Backup %s' "${_BGB_EV_EVENT}" ;;
+    *) printf 'Backup %s' "${_BGB_EV_EVENT}" ;;
   esac
 }
 
@@ -100,15 +100,21 @@ _teams_card() {
 
   {
     printf '{'
-    json_kv type message; printf ','
+    json_kv type message
+    printf ','
     printf '"attachments":[{'
-    json_kv contentType 'application/vnd.microsoft.card.adaptive'; printf ','
-    json_kvraw contentUrl null; printf ','
+    json_kv contentType 'application/vnd.microsoft.card.adaptive'
+    printf ','
+    json_kvraw contentUrl null
+    printf ','
     printf '"content":{'
     # Single-quoted so the shell does not try to expand $schema.
-    json_kv '$schema' 'http://adaptivecards.io/schemas/adaptive-card.json'; printf ','
-    json_kv type AdaptiveCard; printf ','
-    json_kv version '1.5'; printf ','
+    json_kv '$schema' 'http://adaptivecards.io/schemas/adaptive-card.json'
+    printf ','
+    json_kv type AdaptiveCard
+    printf ','
+    json_kv version '1.5'
+    printf ','
     printf '"msteams":{%s},' "$(json_kv width Full)"
     printf '"body":['
     printf '{%s,%s,%s,%s,%s,%s},' \

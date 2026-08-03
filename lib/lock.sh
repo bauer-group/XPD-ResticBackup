@@ -68,21 +68,21 @@ lock_acquire() {
     # a given directory. flock would need a persistent fd, which does not
     # survive the subshells this codebase uses freely.
     if mkdir "${dir}" 2>/dev/null; then
-      printf '%s\n' "$$"          >"${dir}/pid"
+      printf '%s\n' "$$" >"${dir}/pid"
       printf '%s\n' "${boot_now}" >"${dir}/boot"
       printf '%s\n' "${BGB_COMMAND:-?} ${BGB_JOB:-}" >"${dir}/cmd"
-      printf '%s\n' "$(now_iso)"  >"${dir}/since"
+      printf '%s\n' "$(now_iso)" >"${dir}/since"
       _BGB_LOCKS_HELD+=("${dir}")
       debug "Acquired lock '${name}'"
       return 0
     fi
 
-    owner_pid="$(cat "${dir}/pid"  2>/dev/null || true)"
+    owner_pid="$(cat "${dir}/pid" 2>/dev/null || true)"
     owner_boot="$(cat "${dir}/boot" 2>/dev/null || true)"
-    owner_cmd="$(cat "${dir}/cmd"  2>/dev/null || echo '?')"
+    owner_cmd="$(cat "${dir}/cmd" 2>/dev/null || echo '?')"
 
     if [ -z "${owner_pid}" ] || [ "${owner_boot}" != "${boot_now}" ] \
-       || ! kill -0 "${owner_pid}" 2>/dev/null; then
+      || ! kill -0 "${owner_pid}" 2>/dev/null; then
       warn "Reclaiming stale lock '${name}' (pid=${owner_pid:-none}, cmd=${owner_cmd})"
       rm -rf "${dir}"
       continue
@@ -96,7 +96,7 @@ lock_acquire() {
 
     [ "${waited}" -eq 0 ] && log "Waiting for lock '${name}' held by PID ${owner_pid} (up to ${wait_s}s)"
     sleep 5
-    waited=$(( waited + 5 ))
+    waited=$((waited + 5))
   done
 }
 

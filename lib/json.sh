@@ -60,12 +60,12 @@ json_kvraw() { printf '%s:%s' "$(json_str "$1")" "${2:-null}"; }
 json_num() {
   local v="${1:-}"
   case "${v}" in
-    ''|*[!0-9.eE+-]*) printf 'null' ;;
+    '' | *[!0-9.eE+-]*) printf 'null' ;;
     *) printf '%s' "${v}" ;;
   esac
 }
 
-json_bool() { case "${1:-}" in 1|true|yes|on) printf 'true' ;; *) printf 'false' ;; esac; }
+json_bool() { case "${1:-}" in 1 | true | yes | on) printf 'true' ;; *) printf 'false' ;; esac }
 
 # json_array <item...> - array of strings
 json_array() {
@@ -85,11 +85,18 @@ json_array() {
 json_envelope() {
   local verdict="$1" body="$2"
   printf '{'
-  json_kvraw schema "${BGB_JSON_SCHEMA}"; printf ','
-  json_kv host "$(fqdn)"; printf ','
-  json_kv generated "$(now_iso)"; printf ','
-  json_kv tool_version "${BGB_VERSION}"; printf ','
-  [ -n "${body}" ] && { printf '%s' "${body}"; printf ','; }
+  json_kvraw schema "${BGB_JSON_SCHEMA}"
+  printf ','
+  json_kv host "$(fqdn)"
+  printf ','
+  json_kv generated "$(now_iso)"
+  printf ','
+  json_kv tool_version "${BGB_VERSION}"
+  printf ','
+  [ -n "${body}" ] && {
+    printf '%s' "${body}"
+    printf ','
+  }
   json_kv verdict "${verdict}"
   printf '}\n'
 }
@@ -132,26 +139,33 @@ restic_summary_field() {
 restic_parse_summary() {
   local file="$1" line
   require_jq
-  RESTIC_SNAPSHOT_ID=""; RESTIC_FILES_NEW=0; RESTIC_FILES_CHANGED=0
-  RESTIC_FILES_UNMODIFIED=0; RESTIC_DIRS_NEW=0; RESTIC_DIRS_CHANGED=0
-  RESTIC_DIRS_UNMODIFIED=0; RESTIC_DATA_ADDED=0; RESTIC_TOTAL_BYTES=0
-  RESTIC_TOTAL_FILES=0; RESTIC_DURATION=0
+  RESTIC_SNAPSHOT_ID=""
+  RESTIC_FILES_NEW=0
+  RESTIC_FILES_CHANGED=0
+  RESTIC_FILES_UNMODIFIED=0
+  RESTIC_DIRS_NEW=0
+  RESTIC_DIRS_CHANGED=0
+  RESTIC_DIRS_UNMODIFIED=0
+  RESTIC_DATA_ADDED=0
+  RESTIC_TOTAL_BYTES=0
+  RESTIC_TOTAL_FILES=0
+  RESTIC_DURATION=0
 
   [ -r "${file}" ] || return 0
   line="$(jq -c 'select(.message_type=="summary")' "${file}" 2>/dev/null | tail -n1)"
   [ -z "${line}" ] && return 0
 
   RESTIC_SNAPSHOT_ID="$(printf '%s' "${line}" | jq -r '.snapshot_id      // ""')"
-  RESTIC_FILES_NEW="$(printf '%s' "${line}"   | jq -r '.files_new        // 0')"
+  RESTIC_FILES_NEW="$(printf '%s' "${line}" | jq -r '.files_new        // 0')"
   RESTIC_FILES_CHANGED="$(printf '%s' "${line}" | jq -r '.files_changed  // 0')"
   RESTIC_FILES_UNMODIFIED="$(printf '%s' "${line}" | jq -r '.files_unmodified // 0')"
-  RESTIC_DIRS_NEW="$(printf '%s' "${line}"    | jq -r '.dirs_new         // 0')"
+  RESTIC_DIRS_NEW="$(printf '%s' "${line}" | jq -r '.dirs_new         // 0')"
   RESTIC_DIRS_CHANGED="$(printf '%s' "${line}" | jq -r '.dirs_changed    // 0')"
   RESTIC_DIRS_UNMODIFIED="$(printf '%s' "${line}" | jq -r '.dirs_unmodified // 0')"
-  RESTIC_DATA_ADDED="$(printf '%s' "${line}"  | jq -r '.data_added       // 0')"
+  RESTIC_DATA_ADDED="$(printf '%s' "${line}" | jq -r '.data_added       // 0')"
   RESTIC_TOTAL_BYTES="$(printf '%s' "${line}" | jq -r '.total_bytes_processed // 0')"
   RESTIC_TOTAL_FILES="$(printf '%s' "${line}" | jq -r '.total_files_processed // 0')"
-  RESTIC_DURATION="$(printf '%s' "${line}"    | jq -r '.total_duration   // 0')"
+  RESTIC_DURATION="$(printf '%s' "${line}" | jq -r '.total_duration   // 0')"
   return 0
 }
 
@@ -168,10 +182,13 @@ restic_parse_summary() {
 restic_count_errors() {
   local file="$1" n
   require_jq
-  [ -r "${file}" ] || { printf '0'; return 0; }
+  [ -r "${file}" ] || {
+    printf '0'
+    return 0
+  }
   n="$(jq -s '[.[] | select(.message_type=="error")] | length' "${file}" 2>/dev/null)"
   case "${n}" in
-    ''|*[!0-9]*) printf '0' ;;
+    '' | *[!0-9]*) printf '0' ;;
     *) printf '%s' "${n}" ;;
   esac
 }

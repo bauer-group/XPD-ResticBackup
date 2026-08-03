@@ -32,9 +32,9 @@ _BGB_SNAPSHOT_FS_SOURCED=1
 snapshot_fs_begin() {
   local job="$1" state="$2"
   case "${JOB_QUIESCE}" in
-    lvm)   snapshot_fs_lvm_begin "${job}" "${state}" ;;
+    lvm) snapshot_fs_lvm_begin "${job}" "${state}" ;;
     btrfs) snapshot_fs_btrfs_begin "${job}" "${state}" ;;
-    zfs)   snapshot_fs_zfs_begin "${job}" "${state}" ;;
+    zfs) snapshot_fs_zfs_begin "${job}" "${state}" ;;
     *) die "${EX_PRECOND}" "snapshot_fs_begin called with JOB_QUIESCE=${JOB_QUIESCE}" ;;
   esac
 }
@@ -52,19 +52,26 @@ snapshot_fs_end() {
       # full and the NEXT backup fails for an unrelated-looking reason.
       local n=0
       while [ "${n}" -lt 5 ]; do
-        lvremove -f "${snapshot}" >/dev/null 2>&1 && { debug "removed ${snapshot}"; return 0; }
-        sleep 2; n=$(( n + 1 ))
+        lvremove -f "${snapshot}" >/dev/null 2>&1 && {
+          debug "removed ${snapshot}"
+          return 0
+        }
+        sleep 2
+        n=$((n + 1))
       done
       err "Could not remove the LVM snapshot ${snapshot} - remove it by hand:"
       err "    lvremove -f ${snapshot}"
-      return 1 ;;
+      return 1
+      ;;
     btrfs:*)
       local sub="${snapshot#btrfs:}"
-      btrfs subvolume delete "${sub}" >/dev/null 2>&1 || warn "could not delete ${sub}" ;;
+      btrfs subvolume delete "${sub}" >/dev/null 2>&1 || warn "could not delete ${sub}"
+      ;;
     zfs:*)
       local ds="${snapshot#zfs:}"
       umount "${mountpoint}" 2>/dev/null || true
-      zfs destroy "${ds}" >/dev/null 2>&1 || warn "could not destroy ${ds}" ;;
+      zfs destroy "${ds}" >/dev/null 2>&1 || warn "could not destroy ${ds}"
+      ;;
   esac
   return 0
 }
@@ -98,7 +105,8 @@ snapshot_fs_lvm_begin() {
     die "${EX_PRECOND}" "Volume group ${vg} has ${free_g}G free but JOB_SNAPSHOT_SIZE is ${JOB_SNAPSHOT_SIZE}"
   fi
 
-  local name; name="bgb_${job}_$(date -u '+%s')"
+  local name
+  name="bgb_${job}_$(date -u '+%s')"
   local snapdev="/dev/${vg}/${name}"
   local mountpoint="${src}"
 
@@ -132,7 +140,10 @@ snapshot_fs_lvm_begin() {
 # Runs restic with the snapshot mounted over the production path inside a
 # private mount namespace, so nothing else on the host sees the overmount.
 snapshot_fs_run() {
-  [ -n "${BGB_SNAPSHOT_DEV:-}" ] || { "${BGB_RESTIC_BIN}" "$@"; return $?; }
+  [ -n "${BGB_SNAPSHOT_DEV:-}" ] || {
+    "${BGB_RESTIC_BIN}" "$@"
+    return $?
+  }
 
   local fstype
   fstype="$(blkid -o value -s TYPE "${BGB_SNAPSHOT_DEV}" 2>/dev/null || echo auto)"
@@ -160,7 +171,8 @@ snapshot_fs_btrfs_begin() {
   require_cmd btrfs
   local src="${JOB_PATHS[0]:-/}"
   local snapdir="${src%/}/.bgb-snapshots"
-  local name; name="bgb_${job}_$(date -u '+%s')"
+  local name
+  name="bgb_${job}_$(date -u '+%s')"
 
   install -d -m 0700 "${snapdir}" 2>/dev/null || true
   # btrfs snapshots are atomic by design - no freeze is needed, which is why
@@ -193,7 +205,8 @@ snapshot_fs_zfs_begin() {
   ds="$(zfs list -H -o name,mountpoint 2>/dev/null | awk -v m="${src%/}" '$2==m{print $1; exit}')"
   [ -n "${ds}" ] || die "${EX_PRECOND}" "${src} is not a ZFS dataset mountpoint"
 
-  local name; name="bgb_${job}_$(date -u '+%s')"
+  local name
+  name="bgb_${job}_$(date -u '+%s')"
   zfs snapshot "${ds}@${name}" || die "${EX_FAIL}" "zfs snapshot failed"
 
   local mountpoint="/var/lib/bg-backup/snap/${name}"

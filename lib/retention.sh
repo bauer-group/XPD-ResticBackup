@@ -38,11 +38,16 @@ retention_forget_args() {
   # --- the manual pin --------------------------------------------------------
   printf -- '--keep-tag\n%s\n' "${BGB_KEEP_TAG}"
 
-  v="$(job_retention_value LAST)";    [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-last\n%s\n' "${v}"
-  v="$(job_retention_value DAILY)";   [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-daily\n%s\n' "${v}"
-  v="$(job_retention_value WEEKLY)";  [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-weekly\n%s\n' "${v}"
-  v="$(job_retention_value MONTHLY)"; [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-monthly\n%s\n' "${v}"
-  v="$(job_retention_value YEARLY)";  [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-yearly\n%s\n' "${v}"
+  v="$(job_retention_value LAST)"
+  [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-last\n%s\n' "${v}"
+  v="$(job_retention_value DAILY)"
+  [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-daily\n%s\n' "${v}"
+  v="$(job_retention_value WEEKLY)"
+  [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-weekly\n%s\n' "${v}"
+  v="$(job_retention_value MONTHLY)"
+  [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-monthly\n%s\n' "${v}"
+  v="$(job_retention_value YEARLY)"
+  [ -n "${v}" ] && [ "${v}" != "0" ] && printf -- '--keep-yearly\n%s\n' "${v}"
   v="${JOB_KEEP_WITHIN:-${BGB_DEFAULT_KEEP_WITHIN}}"
   [ -n "${v}" ] && printf -- '--keep-within\n%s\n' "${v}"
   return 0
@@ -89,9 +94,9 @@ retention_forget() {
     return "${EX_REPO}"
   fi
 
-  keep="$(printf '%s' "${out}"   | jq '[.[].keep[]?]   | length' 2>/dev/null || echo 0)"
+  keep="$(printf '%s' "${out}" | jq '[.[].keep[]?]   | length' 2>/dev/null || echo 0)"
   remove="$(printf '%s' "${out}" | jq '[.[].remove[]?] | length' 2>/dev/null || echo 0)"
-  before=$(( keep + remove ))
+  before=$((keep + remove))
 
   if [ "${before}" -eq 0 ]; then
     log "${job}: no snapshots to consider"
@@ -102,7 +107,7 @@ retention_forget() {
     return 0
   fi
 
-  pct=$(( remove * 100 / before ))
+  pct=$((remove * 100 / before))
 
   # --- 3. floor --------------------------------------------------------------
   if [ "${keep}" -lt "${BGB_FORGET_MIN_SNAPSHOTS}" ]; then
@@ -155,12 +160,31 @@ cmd_forget() {
   local apply=0 job="" rc=0 worst=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --apply)   apply=1; shift ;;
-      --dry-run) apply=0; shift ;;
-      --job)     job="$2"; shift 2 ;;
-      --job=*)   job="${1#*=}"; shift ;;
-      -*)        err "Unknown flag for forget: $1"; usage_forget; exit "${EX_USAGE}" ;;
-      *)         job="$1"; shift ;;
+      --apply)
+        apply=1
+        shift
+        ;;
+      --dry-run)
+        apply=0
+        shift
+        ;;
+      --job)
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
+      -*)
+        err "Unknown flag for forget: $1"
+        usage_forget
+        exit "${EX_USAGE}"
+        ;;
+      *)
+        job="$1"
+        shift
+        ;;
     esac
   done
 
@@ -196,10 +220,22 @@ cmd_prune() {
   local max_unused="${BGB_PRUNE_MAX_UNUSED}" dry=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --max-unused) max_unused="$2"; shift 2 ;;
-      --max-unused=*) max_unused="${1#*=}"; shift ;;
-      --dry-run) dry=1; shift ;;
-      -*) err "Unknown flag for prune: $1"; exit "${EX_USAGE}" ;;
+      --max-unused)
+        max_unused="$2"
+        shift 2
+        ;;
+      --max-unused=*)
+        max_unused="${1#*=}"
+        shift
+        ;;
+      --dry-run)
+        dry=1
+        shift
+        ;;
+      -*)
+        err "Unknown flag for prune: $1"
+        exit "${EX_USAGE}"
+        ;;
       *) shift ;;
     esac
   done
@@ -243,8 +279,14 @@ cmd_copy() {
   local job=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --job) job="$2"; shift 2 ;;
-      --job=*) job="${1#*=}"; shift ;;
+      --job)
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
       --to) shift 2 ;;
       *) shift ;;
     esac
@@ -271,9 +313,15 @@ cmd_copy() {
   redact_register_file "${BGB_SECONDARY_REPO_ENV}"
   local dst_repo dst_pass
   # shellcheck disable=SC1090
-  dst_repo="$( . "${BGB_SECONDARY_REPO_ENV}" >/dev/null 2>&1; printf '%s' "${RESTIC_REPOSITORY:-}" )"
+  dst_repo="$(
+    . "${BGB_SECONDARY_REPO_ENV}" >/dev/null 2>&1
+    printf '%s' "${RESTIC_REPOSITORY:-}"
+  )"
   # shellcheck disable=SC1090
-  dst_pass="$( . "${BGB_SECONDARY_REPO_ENV}" >/dev/null 2>&1; printf '%s' "${RESTIC_PASSWORD_FILE:-}" )"
+  dst_pass="$(
+    . "${BGB_SECONDARY_REPO_ENV}" >/dev/null 2>&1
+    printf '%s' "${RESTIC_PASSWORD_FILE:-}"
+  )"
 
   [ -n "${dst_repo}" ] || die "${EX_PRECOND}" "${BGB_SECONDARY_REPO_ENV}: RESTIC_REPOSITORY is not set"
   if [ "${dst_repo}" = "${src_repo}" ]; then
@@ -301,7 +349,10 @@ EOF
   for j in "${jobs[@]}"; do
     [ -n "${j}" ] || continue
     config_load_job "${j}"
-    [ "${JOB_COPY_TO_SECONDARY}" = "1" ] || { debug "${j}: copy disabled"; continue; }
+    [ "${JOB_COPY_TO_SECONDARY}" = "1" ] || {
+      debug "${j}: copy disabled"
+      continue
+    }
 
     log "Copying job '${j}' to the secondary repository"
     rc=0

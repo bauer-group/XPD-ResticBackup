@@ -18,7 +18,10 @@ EV=/evidence
 export DEBIAN_FRONTEND=noninteractive
 
 log() { printf '\033[32m[seed]\033[0m %s\n' "$*"; }
-die() { printf '\033[31m[seed]\033[0m %s\n' "$*" >&2; exit 1; }
+die() {
+  printf '\033[31m[seed]\033[0m %s\n' "$*" >&2
+  exit 1
+}
 
 install -d -m 0755 "${EV}"
 
@@ -117,8 +120,8 @@ setfattr -n user.bgb -v "rehearsal" "${D}/size-4k.bin" 2>/dev/null || true
 
 # Content plus METADATA. The metadata manifest is what catches a restore that
 # reproduces bytes and loses modes, owners or link structure.
-( cd "${D}" && find . -type f -exec sha256sum {} + | sort -k2 ) >"${EV}/files.sha256"
-( cd "${D}" && find . -printf '%p|%y|%m|%U|%G|%s|%n\n' | sort ) >"${EV}/files.meta"
+(cd "${D}" && find . -type f -exec sha256sum {} + | sort -k2) >"${EV}/files.sha256"
+(cd "${D}" && find . -printf '%p|%y|%m|%U|%G|%s|%n\n' | sort) >"${EV}/files.meta"
 
 # -----------------------------------------------------------------------------
 log "Installing bg-backup and configuring the repository"
@@ -155,7 +158,7 @@ install -d -m 0700 /srv/dumps
 su - postgres -c "pg_dumpall --globals-only" >/srv/dumps/pg-globals.sql
 su - postgres -c "pg_dump -Fc dr_test" >/srv/dumps/pg-dr_test.dump
 "${MYDUMP}" --single-transaction --quick --routines --triggers --events \
-            --hex-blob --all-databases >/srv/dumps/my-all.sql \
+  --hex-blob --all-databases >/srv/dumps/my-all.sql \
   || die "mariadb-dump failed"
 
 # An empty dump is the failure this rehearsal exists to catch, so assert it
@@ -169,7 +172,7 @@ done
 grep -q 'INSERT INTO' /srv/dumps/my-all.sql \
   || die "my-all.sql contains no INSERT statements"
 
-( cd /srv && find dumps -type f -exec sha256sum {} + | sort -k2 ) >>"${EV}/files.sha256"
+(cd /srv && find dumps -type f -exec sha256sum {} + | sort -k2) >>"${EV}/files.sha256"
 
 # -----------------------------------------------------------------------------
 log "Backing up"

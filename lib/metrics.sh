@@ -95,8 +95,11 @@ metrics_escape_help() {
 _metrics_num() {
   local v="${1:-}"
   case "${v}" in
-    ''|null|*[!0-9.eE+-]*) return 1 ;;
-    *) printf '%s' "${v}"; return 0 ;;
+    '' | null | *[!0-9.eE+-]*) return 1 ;;
+    *)
+      printf '%s' "${v}"
+      return 0
+      ;;
   esac
 }
 
@@ -108,7 +111,8 @@ _metrics_epoch() {
     *[!0-9]*)
       e="$(date -u -d "${t}" '+%s' 2>/dev/null || true)"
       [ -n "${e}" ] || return 1
-      printf '%s' "${e}" ;;
+      printf '%s' "${e}"
+      ;;
     *) printf '%s' "${t}" ;;
   esac
 }
@@ -136,7 +140,7 @@ _metrics_family() {
   # with it.
   case "${block}" in
     *$'\n') printf '%s' "${block}" ;;
-    *)      printf '%s\n' "${block}" ;;
+    *) printf '%s\n' "${block}" ;;
   esac
 }
 
@@ -201,9 +205,9 @@ _metrics_load_job() {
     done < <(jq -r 'to_entries[] | "\(.key)\t\(.value|tostring|gsub("[\n\r\t]";" "))"' "${f}" 2>/dev/null || true)
   else
     for k in status rc run_id snapshot_id started_epoch ended_epoch \
-             duration_seconds files_new files_changed files_unmodified \
-             files_unreadable bytes_added bytes_processed quiesce_seconds \
-             db_dumps db_dumps_failed degraded_reason repo_prefix; do
+      duration_seconds files_new files_changed files_unmodified \
+      files_unreadable bytes_added bytes_processed quiesce_seconds \
+      db_dumps db_dumps_failed degraded_reason repo_prefix; do
       _m_set "${job}" "${k}" "$(state_field "${job}" "${k}")"
     done
   fi
@@ -223,9 +227,9 @@ _metrics_derive_job() {
   # every server with an open socket in a backed-up path look like it has no
   # backup at all.
   case "${status}" in
-    ok|partial) _m_set "${job}" _success 1 ;;
-    '')         : ;;
-    *)          _m_set "${job}" _success 0 ;;
+    ok | partial) _m_set "${job}" _success 1 ;;
+    '') : ;;
+    *) _m_set "${job}" _success 0 ;;
   esac
 
   # last_success: preferred from the state document (if the state module ever
@@ -237,8 +241,8 @@ _metrics_derive_job() {
   ls="$(_m "${job}" last_success_epoch)"
   if [ -z "${ls}" ] || [ "${ls}" = "null" ]; then
     case "${status}" in
-      ok|partial) ls="$(_m "${job}" ended_epoch)" ;;
-      *)          ls="" ;;
+      ok | partial) ls="$(_m "${job}" ended_epoch)" ;;
+      *) ls="" ;;
     esac
   fi
   if _metrics_num "${ls}" >/dev/null; then
@@ -320,7 +324,10 @@ _metrics_bundle_epoch() {
   local f="${BGB_ESCROW_LOCAL:-}" e
   if [ -n "${f}" ] && [ -f "${f}" ]; then
     e="$(stat -c %Y "${f}" 2>/dev/null || true)"
-    if _metrics_num "${e}" >/dev/null; then printf '%s' "${e}"; return 0; fi
+    if _metrics_num "${e}" >/dev/null; then
+      printf '%s' "${e}"
+      return 0
+    fi
   fi
   _metrics_epoch "$(_metrics_repo_get config_export_last)"
 }
@@ -334,17 +341,24 @@ _metrics_bundle_epoch() {
 _metrics_export_stale() {
   local f="${BGB_ESCROW_LOCAL:-}" newer age max
   [ -n "${f}" ] || return 1
-  if [ ! -f "${f}" ]; then printf '1'; return 0; fi
+  if [ ! -f "${f}" ]; then
+    printf '1'
+    return 0
+  fi
 
   if [ -d "${BGB_CONFDIR:-}" ]; then
     newer="$(find "${BGB_CONFDIR}" -type f -newer "${f}" -print -quit 2>/dev/null || true)"
-    if [ -n "${newer}" ]; then printf '1'; return 0; fi
+    if [ -n "${newer}" ]; then
+      printf '1'
+      return 0
+    fi
   fi
 
   age="$(_metrics_age_days "$(_metrics_bundle_epoch || true)" 2>/dev/null || true)"
   max="${BGB_ESCROW_MAX_AGE_DAYS:-90}"
   if [ -n "${age}" ] && awk -v a="${age}" -v m="${max}" 'BEGIN{exit !(a > m)}'; then
-    printf '1'; return 0
+    printf '1'
+    return 0
   fi
   printf '0'
 }
@@ -384,9 +398,9 @@ _metrics_render() {
     'Build information for bg-backup and the restic binary it drives. Always 1; read the labels.' \
     gauge \
     "$(printf '%sbuild_info{%s,version="%s",restic_version="%s"} 1\n' \
-        "${BGB_METRIC_PREFIX}" "${_BGB_MREPO_LABELS}" \
-        "$(metrics_escape_label "${BGB_VERSION:-unknown}")" \
-        "$(metrics_escape_label "${_BGB_MRESTIC_VERSION:-unknown}")")"
+      "${BGB_METRIC_PREFIX}" "${_BGB_MREPO_LABELS}" \
+      "$(metrics_escape_label "${BGB_VERSION:-unknown}")" \
+      "$(metrics_escape_label "${_BGB_MRESTIC_VERSION:-unknown}")")"
 
   # --- run outcome ------------------------------------------------------------
   _metrics_job_gauge last_run_timestamp_seconds \
@@ -412,12 +426,12 @@ _metrics_render() {
     quiesce_seconds
 
   # --- what the run moved -----------------------------------------------------
-  _metrics_job_gauge files_new         'Files new in the last snapshot.'            files_new
-  _metrics_job_gauge files_changed     'Files changed since the previous snapshot.' files_changed
-  _metrics_job_gauge files_unmodified  'Files unchanged since the previous snapshot.' files_unmodified
-  _metrics_job_gauge files_unreadable  'Files that could not be read during the last run (restic exit 3).' files_unreadable
-  _metrics_job_gauge bytes_processed   'Bytes read from the source during the last run.' bytes_processed
-  _metrics_job_gauge bytes_added       'Bytes actually written to the repository after deduplication and compression.' bytes_added
+  _metrics_job_gauge files_new 'Files new in the last snapshot.' files_new
+  _metrics_job_gauge files_changed 'Files changed since the previous snapshot.' files_changed
+  _metrics_job_gauge files_unmodified 'Files unchanged since the previous snapshot.' files_unmodified
+  _metrics_job_gauge files_unreadable 'Files that could not be read during the last run (restic exit 3).' files_unreadable
+  _metrics_job_gauge bytes_processed 'Bytes read from the source during the last run.' bytes_processed
+  _metrics_job_gauge bytes_added 'Bytes actually written to the repository after deduplication and compression.' bytes_added
 
   # --- snapshot identity ------------------------------------------------------
   block=""
@@ -449,9 +463,9 @@ _metrics_render() {
 
   v="$(_metrics_repo_get check_status)"
   case "${v}" in
-    ok)     v=1 ;;
+    ok) v=1 ;;
     failed) v=0 ;;
-    *)      v="" ;;
+    *) v="" ;;
   esac
   _metrics_repo_gauge check_success \
     'Whether the last repository integrity check passed.' "${v}"

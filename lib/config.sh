@@ -108,12 +108,16 @@ config_key_suggest() {
     # transposition or a single wrong letter, which is what typos actually are.
     score=0
     local i n
-    n="${#key}"; [ "${#k}" -lt "${n}" ] && n="${#k}"
-    for (( i=0; i<n; i++ )); do
+    n="${#key}"
+    [ "${#k}" -lt "${n}" ] && n="${#k}"
+    for ((i = 0; i < n; i++)); do
       [ "${key:i:1}" = "${k:i:1}" ] || break
-      score=$(( score + 1 ))
+      score=$((score + 1))
     done
-    if [ "${score}" -gt "${best_score}" ]; then best_score="${score}"; best="${k}"; fi
+    if [ "${score}" -gt "${best_score}" ]; then
+      best_score="${score}"
+      best="${k}"
+    fi
   done
   [ "${best_score}" -ge 4 ] && printf '%s' "${best}"
 
@@ -140,7 +144,7 @@ config_require_perms() {
 
   # Refuse anything more permissive than the maximum. A warning here gets
   # ignored; a refusal gets fixed.
-  if [ $(( 8#${mode} & ~8#${want} )) -ne 0 ]; then
+  if [ $((8#${mode} & ~8#${want})) -ne 0 ]; then
     err "${f}: mode ${mode} is more permissive than ${want}"
     die "${EX_PRECOND}" "Fix it with: chmod ${want} ${f}"
   fi
@@ -162,7 +166,7 @@ config_require_perms() {
 # parse can only cause a false rejection, never a missed substitution.
 _config_strip_comment() {
   local line="$1" out="" i c q=""
-  for (( i=0; i<${#line}; i++ )); do
+  for ((i = 0; i < ${#line}; i++)); do
     c="${line:i:1}"
     if [ -n "${q}" ]; then
       out+="${c}"
@@ -170,9 +174,15 @@ _config_strip_comment() {
       continue
     fi
     case "${c}" in
-      "'"|'"') q="${c}"; out+="${c}" ;;
-      '#')     printf '%s' "${out}"; return 0 ;;
-      *)       out+="${c}" ;;
+      "'" | '"')
+        q="${c}"
+        out+="${c}"
+        ;;
+      '#')
+        printf '%s' "${out}"
+        return 0
+        ;;
+      *) out+="${c}" ;;
     esac
   done
   # No comment found, or an unterminated quote: hand back everything.
@@ -185,13 +195,13 @@ config_lint() {
   [ -r "${f}" ] || die "${EX_PRECOND}" "Cannot read ${f}"
 
   while IFS= read -r line || [ -n "${line}" ]; do
-    n=$(( n + 1 ))
+    n=$((n + 1))
 
     # Inside a multi-line array we only look for the closing parenthesis.
     if [ "${in_array}" -eq 1 ]; then
       code="$(_config_strip_comment "${line}")"
       case "${code}" in
-        *'$('*|*'`'*) die "${EX_PRECOND}" "${f}:${n}: command substitution is not allowed" ;;
+        *'$('* | *'`'*) die "${EX_PRECOND}" "${f}:${n}: command substitution is not allowed" ;;
       esac
       case "${line}" in *')'*) in_array=0 ;; esac
       continue
@@ -199,7 +209,7 @@ config_lint() {
 
     # Blank and comment lines.
     case "${line}" in
-      ''|[[:space:]]*'#'*|'#'*) continue ;;
+      '' | [[:space:]]*'#'* | '#'*) continue ;;
     esac
     [ -z "${line//[[:space:]]/}" ] && continue
 
@@ -210,21 +220,24 @@ config_lint() {
 
     if ! config_key_known "${key}"; then
       err "${f}:${n}: unknown configuration key '${key}'"
-      local hint; hint="$(config_key_suggest "${key}")"
+      local hint
+      hint="$(config_key_suggest "${key}")"
       [ -n "${hint}" ] && err "  did you mean '${hint}'?"
       die "${EX_PRECOND}" "See docs/configuration.md for the full key list."
     fi
 
     code="$(_config_strip_comment "${line}")"
     case "${code}" in
-      *'$('*|*'`'*)
-        die "${EX_PRECOND}" "${f}:${n}: command substitution is not allowed in configuration" ;;
+      *'$('* | *'`'*)
+        die "${EX_PRECOND}" "${f}:${n}: command substitution is not allowed in configuration"
+        ;;
     esac
 
     # Detect the start of a multi-line array: KEY=( ... without a closing ).
     case "${code}" in
       *'=('*)
-        case "${code}" in *')'*) : ;; *) in_array=1 ;; esac ;;
+        case "${code}" in *')'*) : ;; *) in_array=1 ;; esac
+        ;;
     esac
   done <"${f}"
 
@@ -364,9 +377,11 @@ config_job_file() {
   local job="$1" f
   for f in "${BGB_CONFDIR}"/conf.d/*.conf; do
     [ -e "${f}" ] || continue
-    local base; base="$(basename "${f}" .conf)"
+    local base
+    base="$(basename "${f}" .conf)"
     if [ "${base}" = "${job}" ] || [ "${base#[0-9][0-9]-}" = "${job}" ]; then
-      printf '%s' "${f}"; return 0
+      printf '%s' "${f}"
+      return 0
     fi
   done
   return 1
@@ -433,7 +448,7 @@ job_defaults_reset() {
   JOB_DOCKER_INCLUDE_OVERLAY2=0
   JOB_DOCKER_EXTRA_PATHS=()
   JOB_DB_DUMP=1
-  JOB_DB_ENGINES=( postgres mysql mariadb mongodb redis )
+  JOB_DB_ENGINES=(postgres mysql mariadb mongodb redis)
   JOB_DB_EXCLUDE_CONTAINERS=()
   JOB_DB_DUMP_TIMEOUT="3600"
   JOB_DB_DUMP_COMPRESS=0
@@ -443,7 +458,7 @@ job_defaults_reset() {
   # Defaulted rather than bare: this function must be callable before the
   # dispatcher has exported anything, or `set -u` turns a missing export into
   # "unbound variable" pointing at this file instead of at the real cause.
-  JOB_CONFIG_PATHS=( "${BGB_CONFDIR:-/etc/bg-backup}" "/var/lib/bg-backup/facts" )
+  JOB_CONFIG_PATHS=("${BGB_CONFDIR:-/etc/bg-backup}" "/var/lib/bg-backup/facts")
 }
 
 # config_load_job <job>
@@ -466,22 +481,22 @@ config_validate_job() {
   local p
 
   case "${JOB_MODE}" in
-    files|docker|stdin|config) : ;;
+    files | docker | stdin | config) : ;;
     *) die "${EX_PRECOND}" "${BGB_JOB}: invalid JOB_MODE '${JOB_MODE}' (files|docker|stdin|config)" ;;
   esac
 
   case "${JOB_QUIESCE}" in
-    none|docker-pause|docker-stop|service-stop|lvm|btrfs|zfs) : ;;
+    none | docker-pause | docker-stop | service-stop | lvm | btrfs | zfs) : ;;
     *) die "${EX_PRECOND}" "${BGB_JOB}: invalid JOB_QUIESCE '${JOB_QUIESCE}'" ;;
   esac
 
   case "${JOB_PRIORITY}" in
-    low|normal|high) : ;;
+    low | normal | high) : ;;
     *) die "${EX_PRECOND}" "${BGB_JOB}: invalid JOB_PRIORITY '${JOB_PRIORITY}' (low|normal|high)" ;;
   esac
 
   case "${JOB_HOOK_FAILURE}" in
-    abort|warn) : ;;
+    abort | warn) : ;;
     *) die "${EX_PRECOND}" "${BGB_JOB}: invalid JOB_HOOK_FAILURE '${JOB_HOOK_FAILURE}' (abort|warn)" ;;
   esac
 
@@ -520,18 +535,21 @@ config_validate_job() {
     local val="${!v}"
     [ -z "${val}" ] && continue
     case "${val}" in
-      ''|*[!0-9]*) die "${EX_PRECOND}" "${BGB_JOB}: ${v} must be a number, got '${val}'" ;;
+      '' | *[!0-9]*) die "${EX_PRECOND}" "${BGB_JOB}: ${v} must be a number, got '${val}'" ;;
     esac
   done
 
   case "${JOB_QUIESCE}" in
-    docker-pause|docker-stop)
-      have docker || die "${EX_PRECOND}" "${BGB_JOB}: JOB_QUIESCE=${JOB_QUIESCE} but docker is not installed" ;;
+    docker-pause | docker-stop)
+      have docker || die "${EX_PRECOND}" "${BGB_JOB}: JOB_QUIESCE=${JOB_QUIESCE} but docker is not installed"
+      ;;
     service-stop)
       [ "${#JOB_QUIESCE_UNITS[@]}" -gt 0 ] \
-        || die "${EX_PRECOND}" "${BGB_JOB}: JOB_QUIESCE=service-stop requires JOB_QUIESCE_UNITS" ;;
+        || die "${EX_PRECOND}" "${BGB_JOB}: JOB_QUIESCE=service-stop requires JOB_QUIESCE_UNITS"
+      ;;
     lvm)
-      have lvcreate || die "${EX_PRECOND}" "${BGB_JOB}: JOB_QUIESCE=lvm requires lvm2" ;;
+      have lvcreate || die "${EX_PRECOND}" "${BGB_JOB}: JOB_QUIESCE=lvm requires lvm2"
+      ;;
   esac
 
   local h
@@ -547,7 +565,10 @@ job_retention_value() {
   jobvar="JOB_KEEP_${name}"
   defvar="BGB_DEFAULT_KEEP_${name}"
   local v="${!jobvar:-}"
-  [ -n "${v}" ] && { printf '%s' "${v}"; return 0; }
+  [ -n "${v}" ] && {
+    printf '%s' "${v}"
+    return 0
+  }
   printf '%s' "${!defvar:-}"
 }
 
@@ -639,14 +660,19 @@ repo_prefix() {
 # Command: config
 # -----------------------------------------------------------------------------
 cmd_config() {
-  local sub="${1:-show}"; shift || true
+  local sub="${1:-show}"
+  shift || true
   case "${sub}" in
-    show)     config_cmd_show "$@" ;;
+    show) config_cmd_show "$@" ;;
     validate) config_cmd_validate "$@" ;;
-    edit)     config_cmd_edit "$@" ;;
-    export)   secrets_cmd_export "$@" ;;
-    import)   secrets_cmd_import "$@" ;;
-    *) err "Unknown subcommand: config ${sub}"; usage_config; exit "${EX_USAGE}" ;;
+    edit) config_cmd_edit "$@" ;;
+    export) secrets_cmd_export "$@" ;;
+    import) secrets_cmd_import "$@" ;;
+    *)
+      err "Unknown subcommand: config ${sub}"
+      usage_config
+      exit "${EX_USAGE}"
+      ;;
   esac
 }
 
@@ -654,7 +680,10 @@ config_cmd_validate() {
   local strict=0 perms=1 rc=0 f job
   while [ $# -gt 0 ]; do
     case "$1" in
-      --strict) strict=1; shift ;;
+      --strict)
+        strict=1
+        shift
+        ;;
       # Lint a file that is NOT the live configuration: check its syntax and its
       # keys, but not its ownership and mode.
       #
@@ -665,14 +694,17 @@ config_cmd_validate() {
       # host. CI checks out as uid 1001 and every run failed with
       #     bg-backup.conf.example: must be owned by root (currently uid 1001)
       # Never use this flag on ${BGB_CONFDIR}: there the gate is the point.
-      --no-perm-check) perms=0; shift ;;
+      --no-perm-check)
+        perms=0
+        shift
+        ;;
       *) shift ;;
     esac
   done
 
   f="${BGB_CONFIG_FILE:-${BGB_CONFDIR}/bg-backup.conf}"
   if [ -f "${f}" ]; then
-    if ( { [ "${perms}" -eq 0 ] || config_require_perms "${f}" 0640; } && config_lint "${f}" ) 2>/dev/null; then
+    if ({ [ "${perms}" -eq 0 ] || config_require_perms "${f}" 0640; } && config_lint "${f}") 2>/dev/null; then
       ok_mark "${f}"
     else
       [ "${perms}" -eq 1 ] && { config_require_perms "${f}" 0640 || rc=1; }
@@ -680,12 +712,15 @@ config_cmd_validate() {
       bad_mark "${f}"
     fi
   else
-    [ "${strict}" -eq 1 ] && { bad_mark "missing: ${f}"; rc=1; } || warn_mark "no main configuration at ${f}"
+    [ "${strict}" -eq 1 ] && {
+      bad_mark "missing: ${f}"
+      rc=1
+    } || warn_mark "no main configuration at ${f}"
   fi
 
   while IFS= read -r job; do
     [ -n "${job}" ] || continue
-    if ( config_load_job "${job}" ) >/dev/null 2>&1; then
+    if (config_load_job "${job}") >/dev/null 2>&1; then
       ok_mark "job ${job}"
     else
       bad_mark "job ${job}"
@@ -695,17 +730,29 @@ config_cmd_validate() {
   done < <(config_list_jobs)
 
   [ "${rc}" -eq 0 ] && log "Configuration is valid" || err "Configuration has errors"
-  return $(( rc == 0 ? 0 : EX_PRECOND ))
+  return $((rc == 0 ? 0 : EX_PRECOND))
 }
 
 config_cmd_show() {
   local resolved=0 reveal=0 job=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --resolved) resolved=1; shift ;;
-      --reveal)   reveal=1; shift ;;
-      --job)      job="$2"; shift 2 ;;
-      --job=*)    job="${1#*=}"; shift ;;
+      --resolved)
+        resolved=1
+        shift
+        ;;
+      --reveal)
+        reveal=1
+        shift
+        ;;
+      --job)
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -731,10 +778,14 @@ config_cmd_show() {
     done < <(config_list_jobs)
     jobs_json+="]"
     json_envelope ok "$(
-      json_kv config_dir "${BGB_CONFDIR}"; printf ','
-      json_kv main_config "${BGB_MAIN_CONFIG:-}"; printf ','
-      json_kv hostname "${BGB_HOSTNAME}"; printf ','
-      json_kv repo_role "${BGB_REPO_ROLE}"; printf ','
+      json_kv config_dir "${BGB_CONFDIR}"
+      printf ','
+      json_kv main_config "${BGB_MAIN_CONFIG:-}"
+      printf ','
+      json_kv hostname "${BGB_HOSTNAME}"
+      printf ','
+      json_kv repo_role "${BGB_REPO_ROLE}"
+      printf ','
       json_kvraw jobs "${jobs_json}"
     )"
     return 0
@@ -773,8 +824,14 @@ config_cmd_edit() {
   local job="" target tmp
   while [ $# -gt 0 ]; do
     case "$1" in
-      --job) job="$2"; shift 2 ;;
-      --job=*) job="${1#*=}"; shift ;;
+      --job)
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -794,7 +851,7 @@ config_cmd_edit() {
   # Validate the candidate before it is installed. An invalid file in place
   # means every subsequent run refuses to start, including the one that would
   # have told you why.
-  if ! ( config_lint "${tmp}" ); then
+  if ! (config_lint "${tmp}"); then
     err "Not installing: the edited file did not validate"
     err "Your edit is preserved at ${tmp}"
     return "${EX_PRECOND}"

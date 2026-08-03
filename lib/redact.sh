@@ -79,7 +79,7 @@ redact_register_file() {
   local f="$1" line val
   [ -r "${f}" ] || return 0
   while IFS= read -r line || [ -n "${line}" ]; do
-    case "${line}" in ''|\#*) continue ;; esac
+    case "${line}" in '' | \#*) continue ;; esac
     val="${line#*=}"
     val="${val#export }"
     # Strip one layer of matching quotes.
@@ -121,18 +121,19 @@ redact() {
   # Every entry below corresponds to a pattern in the sed. Adding a pattern
   # means adding its trigger here.
   case "${s}" in
-    *://*|*[Bb]earer*|*[Tt]oken*|*[Aa]uthorization*|*[Pp]ass*|*[Ss]ecret*|\
-    *[Kk]ey*|*hc-ping*|*webhook*|*AKIA*|*[Ss]ig=*|*[Ss]ignature*|*api_key*|*api-key*)
-      s="$(printf '%s' "${s}" | sed -E \
-        -e 's#(://[^/:@[:space:]]+):[^@[:space:]]+@#\1:***REDACTED***@#g' \
-        -e 's#(hc-ping\.com/)[0-9a-fA-F-]{16,}#\1***REDACTED***#g' \
-        -e 's#(/api/push/)[A-Za-z0-9_-]{6,}#\1***REDACTED***#g' \
-        -e 's#(https://[A-Za-z0-9.-]*(webhook\.office\.com|logic\.azure\.com)[^[:space:]"'"'"']*)#***REDACTED_WEBHOOK***#g' \
-        -e 's#([Bb]earer[[:space:]]+)[A-Za-z0-9._~+/=-]{8,}#\1***REDACTED***#g' \
-        -e 's#([Aa]uthorization:[[:space:]]*)[^"'"'"',}\r\n]*#\1***REDACTED***#g' \
-        -e 's#((api[_-]?key|access[_-]?token|password|passphrase|secret)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^[:space:]"'"'"',}]{6,}#\1***REDACTED***#gI' \
-        -e 's#\bAKIA[0-9A-Z]{16}\b#***REDACTED***#g' \
-        -e 's#(\?|&)([Tt]oken|[Ss]ig|[Ss]ignature|[Kk]ey)=[^&[:space:]]+#\1\2=***REDACTED***#g' \
+    *://* | *[Bb]earer* | *[Tt]oken* | *[Aa]uthorization* | *[Pp]ass* | *[Ss]ecret* | \
+      *[Kk]ey* | *hc-ping* | *webhook* | *AKIA* | *[Ss]ig=* | *[Ss]ignature* | *api_key* | *api-key*)
+      s="$(
+        printf '%s' "${s}" | sed -E \
+          -e 's#(://[^/:@[:space:]]+):[^@[:space:]]+@#\1:***REDACTED***@#g' \
+          -e 's#(hc-ping\.com/)[0-9a-fA-F-]{16,}#\1***REDACTED***#g' \
+          -e 's#(/api/push/)[A-Za-z0-9_-]{6,}#\1***REDACTED***#g' \
+          -e 's#(https://[A-Za-z0-9.-]*(webhook\.office\.com|logic\.azure\.com)[^[:space:]"'"'"']*)#***REDACTED_WEBHOOK***#g' \
+          -e 's#([Bb]earer[[:space:]]+)[A-Za-z0-9._~+/=-]{8,}#\1***REDACTED***#g' \
+          -e 's#([Aa]uthorization:[[:space:]]*)[^"'"'"',}\r\n]*#\1***REDACTED***#g' \
+          -e 's#((api[_-]?key|access[_-]?token|password|passphrase|secret)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^[:space:]"'"'"',}]{6,}#\1***REDACTED***#gI' \
+          -e 's#\bAKIA[0-9A-Z]{16}\b#***REDACTED***#g' \
+          -e 's#(\?|&)([Tt]oken|[Ss]ig|[Ss]ignature|[Kk]ey)=[^&[:space:]]+#\1\2=***REDACTED***#g'
       )"
       ;;
   esac
@@ -167,7 +168,10 @@ redact_selftest() {
     [ -z "${secret}" ] && continue
     out="$(redact "value=${secret} trailing")"
     case "${out}" in
-      *"${secret}"*) err "Redaction self-test FAILED for a registered secret"; rc=1 ;;
+      *"${secret}"*)
+        err "Redaction self-test FAILED for a registered secret"
+        rc=1
+        ;;
     esac
   done
   return "${rc}"

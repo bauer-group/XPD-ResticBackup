@@ -89,21 +89,39 @@ _BGB_CONSUMED=0
 _bgb_parse_global() {
   _BGB_CONSUMED=1
   case "$1" in
-    --config)      _bgb_need_arg "$@"; BGB_CONFIG_FILE="$2"; _BGB_CONSUMED=2 ;;
-    --config=*)    BGB_CONFIG_FILE="${1#*=}" ;;
-    --job)         _bgb_need_arg "$@"; BGB_JOB_FILTER+=("$2"); _BGB_CONSUMED=2 ;;
-    --job=*)       BGB_JOB_FILTER+=("${1#*=}") ;;
-    --json)        BGB_JSON=1 ;;
-    --quiet|-q)    BGB_QUIET=1 ;;
-    --verbose|-v)  BGB_LOG_LEVEL="debug" ;;
-    --dry-run|-n)  BGB_DRY_RUN=1 ;;
-    --yes|-y)      BGB_YES=1 ;;
-    --no-color)    BGB_COLOR="never"; _bgb_init_colour ;;
-    --color=*)     BGB_COLOR="${1#*=}"; _bgb_init_colour ;;
-    --lock-wait)   _bgb_need_arg "$@"; BGB_LOCK_WAIT="$2"; _BGB_CONSUMED=2 ;;
+    --config)
+      _bgb_need_arg "$@"
+      BGB_CONFIG_FILE="$2"
+      _BGB_CONSUMED=2
+      ;;
+    --config=*) BGB_CONFIG_FILE="${1#*=}" ;;
+    --job)
+      _bgb_need_arg "$@"
+      BGB_JOB_FILTER+=("$2")
+      _BGB_CONSUMED=2
+      ;;
+    --job=*) BGB_JOB_FILTER+=("${1#*=}") ;;
+    --json) BGB_JSON=1 ;;
+    --quiet | -q) BGB_QUIET=1 ;;
+    --verbose | -v) BGB_LOG_LEVEL="debug" ;;
+    --dry-run | -n) BGB_DRY_RUN=1 ;;
+    --yes | -y) BGB_YES=1 ;;
+    --no-color)
+      BGB_COLOR="never"
+      _bgb_init_colour
+      ;;
+    --color=*)
+      BGB_COLOR="${1#*=}"
+      _bgb_init_colour
+      ;;
+    --lock-wait)
+      _bgb_need_arg "$@"
+      BGB_LOCK_WAIT="$2"
+      _BGB_CONSUMED=2
+      ;;
     --lock-wait=*) BGB_LOCK_WAIT="${1#*=}" ;;
-    --no-lock)     BGB_NO_LOCK=1 ;;
-    *)             _BGB_CONSUMED=0 ;;
+    --no-lock) BGB_NO_LOCK=1 ;;
+    *) _BGB_CONSUMED=0 ;;
   esac
 }
 
@@ -118,10 +136,17 @@ main() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --version)
-        printf 'bg-backup %s\n' "${BGB_VERSION}"; exit "${EX_OK}" ;;
-      --help|-h)
-        usage_main; exit "${EX_OK}" ;;
-      --) shift; break ;;
+        printf 'bg-backup %s\n' "${BGB_VERSION}"
+        exit "${EX_OK}"
+        ;;
+      --help | -h)
+        usage_main
+        exit "${EX_OK}"
+        ;;
+      --)
+        shift
+        break
+        ;;
       -*)
         _bgb_parse_global "$@"
         if [ "${_BGB_CONSUMED}" -eq 0 ]; then
@@ -132,7 +157,10 @@ main() {
         shift "${_BGB_CONSUMED}"
         ;;
       *)
-        cmd="$1"; shift; break ;;
+        cmd="$1"
+        shift
+        break
+        ;;
     esac
   done
 
@@ -141,20 +169,30 @@ main() {
   while [ $# -gt 0 ]; do
     arg="$1"
     case "${arg}" in
-      --help|-h) usage_for "${cmd}"; exit "${EX_OK}" ;;
+      --help | -h)
+        usage_for "${cmd}"
+        exit "${EX_OK}"
+        ;;
       -*)
         _bgb_parse_global "$@"
         if [ "${_BGB_CONSUMED}" -eq 0 ]; then
-          _BGB_ARGS+=("${arg}"); shift
+          _BGB_ARGS+=("${arg}")
+          shift
         else
           shift "${_BGB_CONSUMED}"
         fi
         ;;
-      *) _BGB_ARGS+=("${arg}"); shift ;;
+      *)
+        _BGB_ARGS+=("${arg}")
+        shift
+        ;;
     esac
   done
 
-  [ -z "${cmd}" ] && { usage_main; exit "${EX_USAGE}"; }
+  [ -z "${cmd}" ] && {
+    usage_main
+    exit "${EX_USAGE}"
+  }
 
   BGB_COMMAND="${cmd}"
   export BGB_COMMAND
@@ -176,7 +214,8 @@ main() {
 # Modules are sourced on demand. `bg-backup --help` and `bg-backup version` must
 # stay instant and must not require a readable /etc/bg-backup.
 dispatch() {
-  local cmd="$1"; shift
+  local cmd="$1"
+  shift
   local -a args=()
   local a
   # Drop the empty placeholder produced by "${_BGB_ARGS[@]:-}" when no arguments
@@ -190,51 +229,87 @@ dispatch() {
 
   case "${cmd}" in
     version)
-      cmd_version "${args[@]:-}" ;;
+      cmd_version "${args[@]:-}"
+      ;;
     help)
-      usage_for "${args[0]:-}" ;;
+      usage_for "${args[0]:-}"
+      ;;
     completion)
-      cmd_completion "${args[@]:-}" ;;
+      cmd_completion "${args[@]:-}"
+      ;;
 
-    init|discover|doctor)
-      lib_source config.sh; lib_source restic.sh
-      lib_source "${cmd}.sh"; "cmd_${cmd}" "${args[@]:-}" ;;
+    init | discover | doctor)
+      lib_source config.sh
+      lib_source restic.sh
+      lib_source "${cmd}.sh"
+      "cmd_${cmd}" "${args[@]:-}"
+      ;;
 
     backup)
-      lib_source config.sh; lib_source lock.sh; lib_source restic.sh
-      lib_source state.sh; lib_source quiesce.sh; lib_source metrics.sh
-      lib_source monitor.sh; lib_source retention.sh; lib_source backup.sh
-      cmd_backup "${args[@]:-}" ;;
+      lib_source config.sh
+      lib_source lock.sh
+      lib_source restic.sh
+      lib_source state.sh
+      lib_source quiesce.sh
+      lib_source metrics.sh
+      lib_source monitor.sh
+      lib_source retention.sh
+      lib_source backup.sh
+      cmd_backup "${args[@]:-}"
+      ;;
 
-    restore|dump)
-      lib_source config.sh; lib_source restic.sh; lib_source restore.sh
-      "cmd_${cmd}" "${args[@]:-}" ;;
+    restore | dump)
+      lib_source config.sh
+      lib_source restic.sh
+      lib_source restore.sh
+      "cmd_${cmd}" "${args[@]:-}"
+      ;;
 
-    snapshots|ls|find|diff|mount|stats|unlock|runs)
-      lib_source config.sh; lib_source restic.sh; lib_source query.sh
-      "cmd_${cmd}" "${args[@]:-}" ;;
+    snapshots | ls | find | diff | mount | stats | unlock | runs)
+      lib_source config.sh
+      lib_source restic.sh
+      lib_source query.sh
+      "cmd_${cmd}" "${args[@]:-}"
+      ;;
 
-    check|verify)
-      lib_source config.sh; lib_source restic.sh; lib_source state.sh
-      lib_source metrics.sh; lib_source monitor.sh; lib_source verify.sh
-      "cmd_${cmd}" "${args[@]:-}" ;;
+    check | verify)
+      lib_source config.sh
+      lib_source restic.sh
+      lib_source state.sh
+      lib_source metrics.sh
+      lib_source monitor.sh
+      lib_source verify.sh
+      "cmd_${cmd}" "${args[@]:-}"
+      ;;
 
-    forget|prune|copy)
-      lib_source config.sh; lib_source lock.sh; lib_source restic.sh
-      lib_source state.sh; lib_source retention.sh
-      "cmd_${cmd}" "${args[@]:-}" ;;
+    forget | prune | copy)
+      lib_source config.sh
+      lib_source lock.sh
+      lib_source restic.sh
+      lib_source state.sh
+      lib_source retention.sh
+      "cmd_${cmd}" "${args[@]:-}"
+      ;;
 
-    status|logs)
-      lib_source config.sh; lib_source state.sh; lib_source status.sh
-      "cmd_${cmd}" "${args[@]:-}" ;;
+    status | logs)
+      lib_source config.sh
+      lib_source state.sh
+      lib_source status.sh
+      "cmd_${cmd}" "${args[@]:-}"
+      ;;
 
     schedule)
-      lib_source config.sh; lib_source systemd.sh
-      cmd_schedule "${args[@]:-}" ;;
+      lib_source config.sh
+      lib_source systemd.sh
+      cmd_schedule "${args[@]:-}"
+      ;;
 
-    config|secrets)
-      lib_source config.sh; lib_source restic.sh; lib_source secrets.sh
-      "cmd_${cmd}" "${args[@]:-}" ;;
+    config | secrets)
+      lib_source config.sh
+      lib_source restic.sh
+      lib_source secrets.sh
+      "cmd_${cmd}" "${args[@]:-}"
+      ;;
 
     dr)
       # No facts.sh: collection is the standalone pre-hook
@@ -242,25 +317,37 @@ dispatch() {
       # BGB_FACTS_DIR directly. Sourcing a module that was never written made
       # EVERY `bg-backup dr` subcommand abort before its first line - including
       # `dr bootstrap`, the one command a recovered host has to run first.
-      lib_source config.sh; lib_source restic.sh
-      lib_source restore.sh; lib_source secrets.sh; lib_source dr.sh
-      cmd_dr "${args[@]:-}" ;;
+      lib_source config.sh
+      lib_source restic.sh
+      lib_source restore.sh
+      lib_source secrets.sh
+      lib_source dr.sh
+      cmd_dr "${args[@]:-}"
+      ;;
 
-    self-update|uninstall)
-      lib_source config.sh; lib_source systemd.sh; lib_source selfupdate.sh
-      "cmd_${cmd//-/_}" "${args[@]:-}" ;;
+    self-update | uninstall)
+      lib_source config.sh
+      lib_source systemd.sh
+      lib_source selfupdate.sh
+      "cmd_${cmd//-/_}" "${args[@]:-}"
+      ;;
 
     internal)
       # Not documented for humans. Entry point for systemd ExecStopPost= and
       # OnFailure= units, which must work even when the main process was killed.
-      lib_source config.sh; lib_source state.sh; lib_source quiesce.sh
-      lib_source monitor.sh; lib_source internal.sh
-      cmd_internal "${args[@]:-}" ;;
+      lib_source config.sh
+      lib_source state.sh
+      lib_source quiesce.sh
+      lib_source monitor.sh
+      lib_source internal.sh
+      cmd_internal "${args[@]:-}"
+      ;;
 
     *)
       err "Unknown command: ${cmd}"
       usage_main
-      exit "${EX_USAGE}" ;;
+      exit "${EX_USAGE}"
+      ;;
   esac
 }
 
@@ -275,9 +362,12 @@ cmd_version() {
 
   if [ "${BGB_JSON}" = "1" ]; then
     json_envelope ok "$(
-      json_kv version "${BGB_VERSION}"; printf ','
-      json_kv restic_version "${restic_ver}"; printf ','
-      json_kv config_dir "${BGB_CONFDIR}"; printf ','
+      json_kv version "${BGB_VERSION}"
+      printf ','
+      json_kv restic_version "${restic_ver}"
+      printf ','
+      json_kv config_dir "${BGB_CONFDIR}"
+      printf ','
       json_kvraw json_schema "${BGB_JSON_SCHEMA}"
     )"
     return 0
@@ -296,9 +386,11 @@ cmd_completion() {
     bash)
       local f="${BGB_SHARE_DIR}/completion/bg-backup.bash"
       [ -r "${f}" ] || die "${EX_PRECOND}" "Completion script not found: ${f}"
-      cat "${f}" ;;
+      cat "${f}"
+      ;;
     *)
-      die "${EX_USAGE}" "Unsupported shell for completion: ${shell} (only bash)" ;;
+      die "${EX_USAGE}" "Unsupported shell for completion: ${shell} (only bash)"
+      ;;
   esac
 }
 

@@ -31,10 +31,23 @@ cmd_check() {
   local read_data=0 subset="${BGB_CHECK_READ_DATA_SUBSET}"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --read-data) read_data=1; subset=""; shift ;;
-      --read-data-subset) subset="$2"; shift 2 ;;
-      --read-data-subset=*) subset="${1#*=}"; shift ;;
-      -*) err "Unknown flag for check: $1"; exit "${EX_USAGE}" ;;
+      --read-data)
+        read_data=1
+        subset=""
+        shift
+        ;;
+      --read-data-subset)
+        subset="$2"
+        shift 2
+        ;;
+      --read-data-subset=*)
+        subset="${1#*=}"
+        shift
+        ;;
+      -*)
+        err "Unknown flag for check: $1"
+        exit "${EX_USAGE}"
+        ;;
       *) shift ;;
     esac
   done
@@ -55,7 +68,8 @@ cmd_check() {
     # Rotate through the repository rather than re-reading the same slice every
     # day. The bitmap is persisted so a missed day is caught up, not skipped
     # forever - which is what a plain `n = day_of_month` scheme does.
-    local n; n="$(verify_next_subset)"
+    local n
+    n="$(verify_next_subset)"
     args+=(--read-data-subset "${n}")
     log "Reading data subset ${n} (rotating; full coverage every 30 runs)"
   fi
@@ -89,13 +103,21 @@ cmd_check() {
 verify_next_subset() {
   local f="${BGB_STATE_DIR}/check-subset.state"
   local total=30 i oldest=1 oldest_ts=""
-  [ -r "${f}" ] || { printf '1/%s' "${total}"; return 0; }
+  [ -r "${f}" ] || {
+    printf '1/%s' "${total}"
+    return 0
+  }
 
   for i in $(seq 1 "${total}"); do
-    local ts; ts="$(awk -F= -v k="${i}" '$1==k{print $2}' "${f}" 2>/dev/null)"
-    if [ -z "${ts}" ]; then printf '%s/%s' "${i}" "${total}"; return 0; fi
+    local ts
+    ts="$(awk -F= -v k="${i}" '$1==k{print $2}' "${f}" 2>/dev/null)"
+    if [ -z "${ts}" ]; then
+      printf '%s/%s' "${i}" "${total}"
+      return 0
+    fi
     if [ -z "${oldest_ts}" ] || [ "${ts}" -lt "${oldest_ts}" ]; then
-      oldest_ts="${ts}"; oldest="${i}"
+      oldest_ts="${ts}"
+      oldest="${i}"
     fi
   done
   printf '%s/%s' "${oldest}" "${total}"
@@ -103,18 +125,25 @@ verify_next_subset() {
 
 verify_mark_subset_done() {
   local f="${BGB_STATE_DIR}/check-subset.state"
-  local n; n="$(verify_next_subset)"; n="${n%%/*}"
+  local n
+  n="$(verify_next_subset)"
+  n="${n%%/*}"
   install -d -m 0700 "${BGB_STATE_DIR}"
-  { grep -v "^${n}=" "${f}" 2>/dev/null || true; printf '%s=%s\n' "${n}" "$(now_epoch)"; } \
+  {
+    grep -v "^${n}=" "${f}" 2>/dev/null || true
+    printf '%s=%s\n' "${n}" "$(now_epoch)"
+  } \
     | atomic_write "${f}" 0640
 
   # When every slot has been read at least once, the whole repository has been
   # byte-verified within the window - the number that actually answers "is this
   # data still there".
-  local covered; covered="$(grep -c '^[0-9]*=' "${f}" 2>/dev/null || echo 0)"
+  local covered
+  covered="$(grep -c '^[0-9]*=' "${f}" 2>/dev/null || echo 0)"
   if [ "${covered}" -ge 30 ]; then
-    local oldest; oldest="$(awk -F= '{print $2}' "${f}" | sort -n | head -n1)"
-    local age_days=$(( ( $(now_epoch) - oldest ) / 86400 ))
+    local oldest
+    oldest="$(awk -F= '{print $2}' "${f}" | sort -n | head -n1)"
+    local age_days=$((($(now_epoch) - oldest) / 86400))
     state_touch repo_fully_verified_age_days "${age_days}"
   fi
 }
@@ -126,14 +155,39 @@ cmd_verify() {
   local job="" sample="" full=0 databases=1
   while [ $# -gt 0 ]; do
     case "$1" in
-      --job) job="$2"; shift 2 ;;
-      --job=*) job="${1#*=}"; shift ;;
-      --sample) sample="$2"; shift 2 ;;
-      --sample=*) sample="${1#*=}"; shift ;;
-      --full) full=1; shift ;;
-      --no-databases) databases=0; shift ;;
-      --databases) databases=1; shift ;;
-      -*) err "Unknown flag for verify: $1"; usage_verify; exit "${EX_USAGE}" ;;
+      --job)
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
+      --sample)
+        sample="$2"
+        shift 2
+        ;;
+      --sample=*)
+        sample="${1#*=}"
+        shift
+        ;;
+      --full)
+        full=1
+        shift
+        ;;
+      --no-databases)
+        databases=0
+        shift
+        ;;
+      --databases)
+        databases=1
+        shift
+        ;;
+      -*)
+        err "Unknown flag for verify: $1"
+        usage_verify
+        exit "${EX_USAGE}"
+        ;;
       *) shift ;;
     esac
   done
@@ -188,7 +242,8 @@ cmd_verify() {
 verify_canary() {
   local job="$1"
   local canary_dir="/var/lib/bg-backup/canary"
-  local latest; latest="$(find "${canary_dir}" -name '*.sha256' -type f 2>/dev/null | sort | tail -n1)"
+  local latest
+  latest="$(find "${canary_dir}" -name '*.sha256' -type f 2>/dev/null | sort | tail -n1)"
 
   if [ -z "${latest}" ]; then
     warn_mark "no canary recorded yet (it is written by the next backup)"
@@ -202,7 +257,10 @@ verify_canary() {
 
   local snap
   snap="$(restic_latest_snapshot "${job}")"
-  [ -n "${snap}" ] || { warn_mark "no snapshot for job '${job}'"; return 0; }
+  [ -n "${snap}" ] || {
+    warn_mark "no snapshot for job '${job}'"
+    return 0
+  }
 
   local got
   got="$(restic_exec dump "${snap}" "${canary_dir}/${name}" 2>/dev/null | sha256sum | awk '{print $1}')"
@@ -221,7 +279,8 @@ verify_canary() {
 verify_write_canary() {
   local dir="/var/lib/bg-backup/canary"
   install -d -m 0700 "${dir}"
-  local name; name="canary-$(date -u '+%Y%m%d').bin"
+  local name
+  name="canary-$(date -u '+%Y%m%d').bin"
   # Keep exactly one: the point is a fixed, known-good object, not a history.
   find "${dir}" -type f -delete 2>/dev/null || true
   dd if=/dev/urandom of="${dir}/${name}" bs=1M count=1 status=none 2>/dev/null \
@@ -239,10 +298,12 @@ verify_sample_files() {
   [ "${n}" -gt 0 ] 2>/dev/null || return 0
   require_jq
 
-  local snap; snap="$(restic_latest_snapshot "${job}")"
+  local snap
+  snap="$(restic_latest_snapshot "${job}")"
   [ -n "${snap}" ] || return 0
 
-  local staging; staging="$(tmp_root)/verify-${job}"
+  local staging
+  staging="$(tmp_root)/verify-${job}"
   install -d -m 0700 "${staging}"
 
   # Sample only regular files with a size, and only ones whose live copy still
@@ -253,7 +314,7 @@ verify_sample_files() {
     restic_capture ls --json "${snap}" 2>/dev/null \
       | jq -r 'select(.struct_type=="node" and .type=="file" and (.size // 0) > 0)
                | [.path, (.size|tostring), (.mtime // "")] | @tsv' 2>/dev/null \
-      | shuf -n "$(( n * 4 ))" 2>/dev/null || true
+      | shuf -n "$((n * 4))" 2>/dev/null || true
   )
 
   local checked=0 failed=0 path size mtime
@@ -263,18 +324,19 @@ verify_sample_files() {
     [ "${checked}" -ge "${n}" ] && break
     IFS=$'\t' read -r path size mtime <<<"${line}"
     [ -f "${path}" ] || continue
-    local live_size; live_size="$(stat -c %s "${path}" 2>/dev/null || echo -1)"
+    local live_size
+    live_size="$(stat -c %s "${path}" 2>/dev/null || echo -1)"
     [ "${live_size}" = "${size}" ] || continue
 
     local want got
     want="$(sha256sum "${path}" 2>/dev/null | awk '{print $1}')"
     got="$(restic_exec dump "${snap}" "${path}" 2>/dev/null | sha256sum | awk '{print $1}')"
-    checked=$(( checked + 1 ))
+    checked=$((checked + 1))
     if [ "${want}" = "${got}" ]; then
       debug "verified ${path}"
     else
       bad_mark "restored content differs from live: ${path}"
-      failed=$(( failed + 1 ))
+      failed=$((failed + 1))
     fi
   done
 
@@ -294,7 +356,10 @@ verify_sample_files() {
 # -----------------------------------------------------------------------------
 verify_databases() {
   local full="$1"
-  have docker || { warn_mark "docker not available - skipping database verification"; return 0; }
+  have docker || {
+    warn_mark "docker not available - skipping database verification"
+    return 0
+  }
   require_jq
   lib_source db.sh
 
@@ -320,7 +385,7 @@ verify_databases() {
     printf '\n  %stesting the oldest retained dump%s\n' "${C_BOLD}" "${C_RESET}" >&2
     local oldest
     oldest="$(restic_capture snapshots --json --tag kind=dbdump 2>/dev/null \
-              | jq -r 'sort_by(.time) | first | [.short_id, (.paths[0]//""|ltrimstr("/")),
+      | jq -r 'sort_by(.time) | first | [.short_id, (.paths[0]//""|ltrimstr("/")),
                        ((.tags[]|select(startswith("engine="))|sub("engine=";""))//""),
                        ((.tags[]|select(startswith("container="))|sub("container=";""))//"")] | @tsv' 2>/dev/null)"
     if [ -n "${oldest}" ]; then
@@ -360,26 +425,29 @@ verify_one_dump() {
   # spending a container start.
   local size
   size="$(restic_capture ls --json "${snap}" "/${path}" 2>/dev/null \
-          | jq -r 'select(.struct_type=="node") | .size // 0' | tail -n1)"
+    | jq -r 'select(.struct_type=="node") | .size // 0' | tail -n1)"
   if [ -z "${size}" ] || [ "${size}" -lt 64 ] 2>/dev/null; then
     bad_mark "${container}: dump is empty or missing (${size:-0} bytes)"
     return "${EX_VERIFY}"
   fi
 
   case "${engine}" in
-    postgres|mysql|mariadb)
+    postgres | mysql | mariadb)
       local tail_txt
       tail_txt="$(restic_exec dump "${snap}" "/${path}" 2>/dev/null | tail -c 400 || true)"
       case "${tail_txt}" in
-        *"PostgreSQL database dump complete"*|*"Dump completed on"*|*"-- Dump completed"*)
-          debug "${container}: dump trailer present" ;;
+        *"PostgreSQL database dump complete"* | *"Dump completed on"* | *"-- Dump completed"*)
+          debug "${container}: dump trailer present"
+          ;;
         *)
           # A dump without its completion marker was cut short. restic's
           # --stdin-from-command should have prevented this, so finding one
           # means something upstream is wrong.
           bad_mark "${container}: dump has no completion marker - it is truncated"
-          return "${EX_VERIFY}" ;;
-      esac ;;
+          return "${EX_VERIFY}"
+          ;;
+      esac
+      ;;
   esac
 
   ok_mark "${container} (${engine}): $(human_bytes "${size}"), trailer OK"
@@ -412,7 +480,8 @@ verify_restore_into_scratch() {
     return 0
   fi
 
-  local rand; rand="$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8)"
+  local rand
+  rand="$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8)"
   local name="bgb-verify-${engine}-${rand}"
   local net="bgb-verify-${rand}"
 
@@ -422,12 +491,12 @@ verify_restore_into_scratch() {
   docker network create --internal "${net}" >/dev/null 2>&1 || true
 
   local -a run=(run -d --name "${name}" --network "${net}"
-                --label bg-backup.scratch=1
-                --memory 1g --cpus 1
-                -e POSTGRES_PASSWORD=verify -e POSTGRES_HOST_AUTH_METHOD=trust
-                -e MYSQL_ROOT_PASSWORD=verify -e MARIADB_ROOT_PASSWORD=verify
-                -e MONGO_INITDB_ROOT_USERNAME=root -e MONGO_INITDB_ROOT_PASSWORD=verify
-                "${image}")
+    --label bg-backup.scratch=1
+    --memory 1g --cpus 1
+    -e POSTGRES_PASSWORD=verify -e POSTGRES_HOST_AUTH_METHOD=trust
+    -e MYSQL_ROOT_PASSWORD=verify -e MARIADB_ROOT_PASSWORD=verify
+    -e MONGO_INITDB_ROOT_USERNAME=root -e MONGO_INITDB_ROOT_PASSWORD=verify
+    "${image}")
 
   if ! docker "${run[@]}" >/dev/null 2>&1; then
     warn_mark "${container}: could not start a scratch container from ${image}"
@@ -441,11 +510,17 @@ verify_restore_into_scratch() {
   local waited=0 ready=0
   while [ "${waited}" -lt 120 ]; do
     if declare -F "db_${engine}_verify_cmd" >/dev/null 2>&1; then
-      if "db_${engine}_verify_cmd" "${name}" >/dev/null 2>&1; then ready=1; break; fi
+      if "db_${engine}_verify_cmd" "${name}" >/dev/null 2>&1; then
+        ready=1
+        break
+      fi
     else
-      sleep 10; ready=1; break
+      sleep 10
+      ready=1
+      break
     fi
-    sleep 3; waited=$(( waited + 3 ))
+    sleep 3
+    waited=$((waited + 3))
   done
 
   if [ "${ready}" -ne 1 ]; then
@@ -479,7 +554,7 @@ verify_restore_into_scratch() {
   fi
 
   if [ "$(printf '%s' "${now_counts}" | jq -S -c . 2>/dev/null)" \
-     = "$(printf '%s' "${want_counts}" | jq -S -c . 2>/dev/null)" ]; then
+    = "$(printf '%s' "${want_counts}" | jq -S -c . 2>/dev/null)" ]; then
     ok_mark "${container}: dump loaded and every object count matches"
     return 0
   fi

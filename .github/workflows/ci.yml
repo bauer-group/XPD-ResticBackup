@@ -113,8 +113,15 @@ jobs:
         env:
           SHFMT_VERSION: v3.12.0
         run: |
+          # The git-tracked file list, NOT directory globs. `tests` contains the
+          # vendored bats-core/bats-support/bats-assert/bats-file submodules, so
+          # walking it made this gate demand shfmt formatting of third-party
+          # code - 448 files instead of our 48. git ls-files sees a submodule as
+          # a gitlink and never its contents, and it is the same list `make lint`
+          # and `make format` use, so the three cannot disagree.
+          mapfile -t files < <(git ls-files '*.sh' '*.bash')
           go run "mvdan.cc/sh/v3/cmd/shfmt@${SHFMT_VERSION}" \
-            -i 2 -ci -bn -d bin lib share scripts tests install.sh
+            -i 2 -ci -bn -d "${files[@]}"
 
   # ===========================================================================
   # Tests

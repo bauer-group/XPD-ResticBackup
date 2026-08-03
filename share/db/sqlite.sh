@@ -150,8 +150,14 @@ _db_sqlite_hostpath() {
   while IFS=$'\t' read -r dest src; do
     [ -n "${dest}" ] || continue
     case "${path}" in
-      "${dest}") printf '%s' "${src}"; return 0 ;;
-      "${dest%/}"/*) printf '%s%s' "${src%/}" "${path#"${dest%/}"}"; return 0 ;;
+      "${dest}")
+        printf '%s' "${src}"
+        return 0
+        ;;
+      "${dest%/}"/*)
+        printf '%s%s' "${src%/}" "${path#"${dest%/}"}"
+        return 0
+        ;;
     esac
   done < <(docker inspect --format '{{range .Mounts}}{{.Destination}}{{"\t"}}{{.Source}}{{"\n"}}{{end}}' "${c}" 2>/dev/null || true)
   printf ''
@@ -168,7 +174,7 @@ db_sqlite_paths() {
   have docker || return 0
 
   label="$(docker inspect --format "{{index .Config.Labels \"${_DB_SQLITE_LABEL}\"}}" "${c}" 2>/dev/null || true)"
-  case "${label}" in ''|'<no value>') label="" ;; esac
+  case "${label}" in '' | '<no value>') label="" ;; esac
   if [ -n "${label}" ]; then
     printf '%s\n' "${label}" | tr ',;: ' '\n\n\n\n' | while IFS= read -r p; do
       [ -n "${p}" ] && printf '%s\n' "${p}"
@@ -186,7 +192,17 @@ db_sqlite_paths() {
       *) printf '%s\n' "${p}" ;;
     esac
   done
-  if [ "${#JOB_DB_SQLITE_PATHS[@]:-0}" -gt 0 ]; then return 0; fi
+  # `${#ARR[@]:-0}` is NOT valid bash - length and default are two expansion
+  # operators and cannot be combined. It is a hard "bad substitution" error, so
+  # this function aborted here every time and SQLite auto-discovery never ran:
+  # the mount scan below was unreachable and a container with SQLite databases
+  # was silently backed up without any of them being handled.
+  #
+  # ${ARR+x} tests whether the array is SET, which is the part that needs
+  # guarding under `set -u`; the length is then taken on its own.
+  if [ -n "${JOB_DB_SQLITE_PATHS+x}" ] && [ "${#JOB_DB_SQLITE_PATHS[@]}" -gt 0 ]; then
+    return 0
+  fi
 
   # Last resort: scan the container's own mount points. Only mounted paths are
   # scanned - anything inside the writable container layer is thrown away on the
@@ -214,7 +230,7 @@ db_sqlite_detect() {
   have docker || return 1
 
   label="$(docker inspect --format "{{index .Config.Labels \"${_DB_SQLITE_LABEL}\"}}" "${c}" 2>/dev/null || true)"
-  case "${label}" in ''|'<no value>') label="" ;; esac
+  case "${label}" in '' | '<no value>') label="" ;; esac
   [ -n "${label}" ] && return 0
 
   local p
@@ -226,10 +242,10 @@ db_sqlite_detect() {
   image="$(printf '%s' "${image}" | tr '[:upper:]' '[:lower:]')"
   [ -n "${image}" ] || return 1
   case "${image}" in
-    *gitea*|*forgejo*|*vaultwarden*|*uptime-kuma*|*n8n*|*grafana*|*home-assistant*|*homeassistant*|\
-    *sonarr*|*radarr*|*lidarr*|*readarr*|*prowlarr*|*bazarr*|*jellyfin*|*navidrome*|*audiobookshelf*|\
-    *calibre*|*linkding*|*shiori*|*photoprism*|*mealie*|*vikunja*|*changedetection*|*syncthing*|\
-    *pihole*|*freshrss*|*tandoor*|*karakeep*|*hoarder*|*speedtest*) : ;;
+    *gitea* | *forgejo* | *vaultwarden* | *uptime-kuma* | *n8n* | *grafana* | *home-assistant* | *homeassistant* | \
+      *sonarr* | *radarr* | *lidarr* | *readarr* | *prowlarr* | *bazarr* | *jellyfin* | *navidrome* | *audiobookshelf* | \
+      *calibre* | *linkding* | *shiori* | *photoprism* | *mealie* | *vikunja* | *changedetection* | *syncthing* | \
+      *pihole* | *freshrss* | *tandoor* | *karakeep* | *hoarder* | *speedtest*) : ;;
     *) return 1 ;;
   esac
 
@@ -254,7 +270,8 @@ _db_sqlite_argv() {
 
 # See postgres.sh for why --stdin-from-command, timeout(1) and no `-t`.
 _db_sqlite_run() {
-  local job="$1" run="$2" name="$3" tag="$4"; shift 4
+  local job="$1" run="$2" name="$3" tag="$4"
+  shift 4
   [ "${1:-}" = "--" ] && shift
 
   local log rc=0
@@ -264,12 +281,12 @@ _db_sqlite_run() {
   mapfile -t argv < <(_db_sqlite_argv "${job}" "${run}" "${name}" "${tag}")
   argv+=(timeout "${JOB_DB_DUMP_TIMEOUT:-3600}" "$@")
 
-  BGB_RUN_DB_DUMPS=$(( ${BGB_RUN_DB_DUMPS:-0} + 1 ))
+  BGB_RUN_DB_DUMPS=$((${BGB_RUN_DB_DUMPS:-0} + 1))
   restic_exec_logged "${log}" "${argv[@]}" || rc=$?
   BGB_DB_LAST_LOG="${log}"
 
   if [ "${rc}" -ne 0 ]; then
-    BGB_RUN_DB_DUMPS_FAILED=$(( ${BGB_RUN_DB_DUMPS_FAILED:-0} + 1 ))
+    BGB_RUN_DB_DUMPS_FAILED=$((${BGB_RUN_DB_DUMPS_FAILED:-0} + 1))
     err "sqlite: ${name} failed (restic rc=${rc}: $(restic_explain_rc "${rc}"))"
     return "${EX_FAIL}"
   fi
@@ -363,11 +380,16 @@ db_sqlite_counts() {
 
   local p safe hostpath key val first=1 raw
   printf '{'
-  json_kv engine sqlite; printf ','
-  json_kv container "${c}"; printf ','
-  json_kv taken "$(now_iso)"; printf ','
-  json_kv source "live"; printf ','
-  json_kvraw exact true; printf ','
+  json_kv engine sqlite
+  printf ','
+  json_kv container "${c}"
+  printf ','
+  json_kv taken "$(now_iso)"
+  printf ','
+  json_kv source "live"
+  printf ','
+  json_kvraw exact true
+  printf ','
   printf '"objects":{'
   for p in "${paths[@]}"; do
     [ -n "${p}" ] || continue

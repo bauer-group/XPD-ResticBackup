@@ -23,27 +23,27 @@ _BGB_CORE_SOURCED=1
 # EX_PARTIAL is deliberately NOT collapsed into success or failure. It is the
 # difference between "some files were unreadable" and "no backup exists", and a
 # tool that loses that distinction teaches its operators to ignore both.
-readonly EX_OK=0        # success
-readonly EX_FAIL=1      # generic fatal error
-readonly EX_USAGE=2     # unknown flag, missing argument
-readonly EX_PARTIAL=3   # snapshot created, some sources unreadable (restic 3)
-readonly EX_PRECOND=4   # not root, missing dependency, invalid config
-readonly EX_LOCKED=5    # another instance holds the lock
-readonly EX_REPO=6      # repository unreachable / uninitialised / wrong key
-readonly EX_VERIFY=7    # check or verify found damage
-readonly EX_HOOK=8      # a pre/post hook failed
-readonly EX_SAFETY=9    # a safety rail refused a destructive operation
+readonly EX_OK=0      # success
+readonly EX_FAIL=1    # generic fatal error
+readonly EX_USAGE=2   # unknown flag, missing argument
+readonly EX_PARTIAL=3 # snapshot created, some sources unreadable (restic 3)
+readonly EX_PRECOND=4 # not root, missing dependency, invalid config
+readonly EX_LOCKED=5  # another instance holds the lock
+readonly EX_REPO=6    # repository unreachable / uninitialised / wrong key
+readonly EX_VERIFY=7  # check or verify found damage
+readonly EX_HOOK=8    # a pre/post hook failed
+readonly EX_SAFETY=9  # a safety rail refused a destructive operation
 readonly EX_INTERRUPT=130
 
 # -----------------------------------------------------------------------------
 # Runtime defaults (overridable by config, environment, then flags)
 # -----------------------------------------------------------------------------
-: "${BGB_LOG_LEVEL:=info}"        # error|warn|info|debug
+: "${BGB_LOG_LEVEL:=info}" # error|warn|info|debug
 : "${BGB_QUIET:=0}"
 : "${BGB_JSON:=0}"
 : "${BGB_DRY_RUN:=0}"
 : "${BGB_YES:=0}"
-: "${BGB_COLOR:=auto}"            # auto|always|never
+: "${BGB_COLOR:=auto}" # auto|always|never
 : "${BGB_LOG_DIR:=/var/log/bg-backup}"
 : "${BGB_TMP_DIR:=/var/lib/bg-backup/tmp}"
 : "${BGB_COMMAND:=}"
@@ -64,10 +64,21 @@ _bgb_init_colour() {
     *) [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && use=1 ;;
   esac
   if [ "${use}" -eq 1 ]; then
-    C_RED=$'\033[0;31m'; C_GREEN=$'\033[0;32m'; C_YELLOW=$'\033[1;33m'
-    C_BLUE=$'\033[0;34m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_RESET=$'\033[0m'
+    C_RED=$'\033[0;31m'
+    C_GREEN=$'\033[0;32m'
+    C_YELLOW=$'\033[1;33m'
+    C_BLUE=$'\033[0;34m'
+    C_DIM=$'\033[2m'
+    C_BOLD=$'\033[1m'
+    C_RESET=$'\033[0m'
   else
-    C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_DIM=""; C_BOLD=""; C_RESET=""
+    C_RED=""
+    C_GREEN=""
+    C_YELLOW=""
+    C_BLUE=""
+    C_DIM=""
+    C_BOLD=""
+    C_RESET=""
   fi
 }
 _bgb_init_colour
@@ -113,20 +124,21 @@ _bgb_emit() {
   printf '%s %s\n' "${prefix}" "${msg}" >&2
 }
 
-log()   { _bgb_emit info  "${C_GREEN}[bg-backup]${C_RESET}"       "$*"; }
-warn()  { _bgb_emit warn  "${C_YELLOW}[bg-backup WARN]${C_RESET}" "$*"; }
-err()   { _bgb_emit error "${C_RED}[bg-backup ERROR]${C_RESET}"   "$*"; }
-debug() { _bgb_emit debug "${C_DIM}[bg-backup debug]${C_RESET}"   "$*"; }
+log() { _bgb_emit info "${C_GREEN}[bg-backup]${C_RESET}" "$*"; }
+warn() { _bgb_emit warn "${C_YELLOW}[bg-backup WARN]${C_RESET}" "$*"; }
+err() { _bgb_emit error "${C_RED}[bg-backup ERROR]${C_RESET}" "$*"; }
+debug() { _bgb_emit debug "${C_DIM}[bg-backup debug]${C_RESET}" "$*"; }
 
 # Status markers for `doctor` and other check-style output (house style, see
 # IAC-Cloud/scripts/doctor.sh).
-ok_mark()   { printf '  %s✓%s %s\n' "${C_GREEN}"  "${C_RESET}" "$*" >&2; }
+ok_mark() { printf '  %s✓%s %s\n' "${C_GREEN}" "${C_RESET}" "$*" >&2; }
 warn_mark() { printf '  %s!%s %s\n' "${C_YELLOW}" "${C_RESET}" "$*" >&2; }
-bad_mark()  { printf '  %s✗%s %s\n' "${C_RED}"    "${C_RESET}" "$*" >&2; }
+bad_mark() { printf '  %s✗%s %s\n' "${C_RED}" "${C_RESET}" "$*" >&2; }
 
 # die <exit-code> <message...>
 die() {
-  local code="$1"; shift
+  local code="$1"
+  shift
   err "$*"
   exit "${code}"
 }
@@ -156,7 +168,7 @@ on_cleanup() { _BGB_CLEANUP_HANDLERS+=("$1"); }
 
 _bgb_run_cleanup() {
   local i handler
-  for (( i=${#_BGB_CLEANUP_HANDLERS[@]}-1; i>=0; i-- )); do
+  for ((i = ${#_BGB_CLEANUP_HANDLERS[@]} - 1; i >= 0; i--)); do
     handler="${_BGB_CLEANUP_HANDLERS[i]}"
     # Never let a failing handler abort the remaining ones, and never let it
     # change the exit code we are on our way to returning.
@@ -182,7 +194,7 @@ _bgb_on_signal() {
 
 install_traps() {
   trap _bgb_on_exit EXIT
-  trap '_bgb_on_signal INT'  INT
+  trap '_bgb_on_signal INT' INT
   trap '_bgb_on_signal TERM' TERM
 }
 
@@ -241,7 +253,10 @@ _bgb_tmp_cleanup() {
 # replacement be interpreted at all.
 str_replace_all() {
   local s="$1" needle="$2" repl="$3" out=""
-  [ -n "${needle}" ] || { printf '%s' "${s}"; return 0; }
+  [ -n "${needle}" ] || {
+    printf '%s' "${s}"
+    return 0
+  }
   while [[ "${s}" == *"${needle}"* ]]; do
     out="${out}${s%%"${needle}"*}${repl}"
     s="${s#*"${needle}"}"
@@ -282,7 +297,8 @@ require_jq() {
 # a hook in this: retrying a failed dump hides the failure it was meant to
 # surface, and retrying a partially-applied hook is worse than not retrying.
 retry() {
-  local attempts="$1" delay="$2"; shift 2
+  local attempts="$1" delay="$2"
+  shift 2
   [ "${1:-}" = "--" ] && shift
   local n=1 rc=0
   while :; do
@@ -295,7 +311,7 @@ retry() {
     fi
     warn "Attempt ${n}/${attempts} failed (rc=${rc}), retrying in ${delay}s"
     sleep "${delay}"
-    n=$(( n + 1 ))
+    n=$((n + 1))
   done
 }
 
@@ -304,7 +320,8 @@ retry() {
 # status - not tee's. $? after a pipeline is the last element's status, which is
 # the single most common way a shell wrapper reports a failed backup as success.
 run_logged() {
-  local logfile="$1"; shift
+  local logfile="$1"
+  shift
   local rc=0
   if [ "${BGB_DRY_RUN}" = "1" ]; then
     log "[dry-run] $*"
@@ -329,13 +346,13 @@ confirm() {
   fi
   printf '%s%s [y/N]%s ' "${C_BOLD}" "${prompt}" "${C_RESET}" >&2
   read -r reply
-  case "${reply}" in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
+  case "${reply}" in [yY] | [yY][eE][sS]) return 0 ;; *) return 1 ;; esac
 }
 
 # -----------------------------------------------------------------------------
 # Small utilities
 # -----------------------------------------------------------------------------
-now_iso()  { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 now_epoch() { date -u '+%s'; }
 
 fqdn() {
@@ -359,17 +376,21 @@ atomic_write() {
 # human_bytes <n>
 human_bytes() {
   local b="${1:-0}"
-  if   [ "${b}" -ge 1099511627776 ] 2>/dev/null; then awk -v b="${b}" 'BEGIN{printf "%.2f TiB", b/1099511627776}'
-  elif [ "${b}" -ge 1073741824 ]    2>/dev/null; then awk -v b="${b}" 'BEGIN{printf "%.2f GiB", b/1073741824}'
-  elif [ "${b}" -ge 1048576 ]       2>/dev/null; then awk -v b="${b}" 'BEGIN{printf "%.2f MiB", b/1048576}'
-  elif [ "${b}" -ge 1024 ]          2>/dev/null; then awk -v b="${b}" 'BEGIN{printf "%.2f KiB", b/1024}'
+  if [ "${b}" -ge 1099511627776 ] 2>/dev/null; then
+    awk -v b="${b}" 'BEGIN{printf "%.2f TiB", b/1099511627776}'
+  elif [ "${b}" -ge 1073741824 ] 2>/dev/null; then
+    awk -v b="${b}" 'BEGIN{printf "%.2f GiB", b/1073741824}'
+  elif [ "${b}" -ge 1048576 ] 2>/dev/null; then
+    awk -v b="${b}" 'BEGIN{printf "%.2f MiB", b/1048576}'
+  elif [ "${b}" -ge 1024 ] 2>/dev/null; then
+    awk -v b="${b}" 'BEGIN{printf "%.2f KiB", b/1024}'
   else printf '%s B' "${b}"; fi
 }
 
 # human_duration <seconds>
 human_duration() {
   local s="${1:-0}"
-  printf '%dh %02dm %02ds' $(( s / 3600 )) $(( (s % 3600) / 60 )) $(( s % 60 ))
+  printf '%dh %02dm %02ds' $((s / 3600)) $(((s % 3600) / 60)) $((s % 60))
 }
 
 # worst_rc <a> <b> - fold two exit codes, keeping the more severe.
@@ -379,8 +400,17 @@ human_duration() {
 worst_rc() {
   local a="${1:-0}" b="${2:-0}"
   local -a rank=()
-  rank[0]=0; rank[3]=1; rank[8]=2; rank[7]=3; rank[9]=3
-  rank[5]=4; rank[6]=5; rank[4]=6; rank[2]=6; rank[1]=7; rank[130]=8
+  rank[0]=0
+  rank[3]=1
+  rank[8]=2
+  rank[7]=3
+  rank[9]=3
+  rank[5]=4
+  rank[6]=5
+  rank[4]=6
+  rank[2]=6
+  rank[1]=7
+  rank[130]=8
   local ra="${rank[a]:-7}" rb="${rank[b]:-7}"
   if [ "${ra}" -ge "${rb}" ]; then printf '%s' "${a}"; else printf '%s' "${b}"; fi
 }

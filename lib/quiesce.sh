@@ -55,8 +55,10 @@ quiesce_recover_stale() {
 # -----------------------------------------------------------------------------
 # quiesce_begin <job> [container-filter-args...]
 quiesce_begin() {
-  local job="${1:-${BGB_JOB}}"; shift || true
-  local f; f="$(quiesce_state_file "${job}")"
+  local job="${1:-${BGB_JOB}}"
+  shift || true
+  local f
+  f="$(quiesce_state_file "${job}")"
 
   [ "${JOB_QUIESCE}" = "none" ] && return 0
 
@@ -78,19 +80,22 @@ quiesce_begin() {
   _BGB_QUIESCE_ACTIVE=1
 
   case "${JOB_QUIESCE}" in
-    docker-pause)  _quiesce_docker_pause "${job}" "${f}" "$@" ;;
-    docker-stop)   _quiesce_docker_stop "${job}" "${f}" ;;
-    service-stop)  _quiesce_service_stop "${job}" "${f}" ;;
-    lvm|btrfs|zfs)
+    docker-pause) _quiesce_docker_pause "${job}" "${f}" "$@" ;;
+    docker-stop) _quiesce_docker_stop "${job}" "${f}" ;;
+    service-stop) _quiesce_service_stop "${job}" "${f}" ;;
+    lvm | btrfs | zfs)
       lib_source snapshot_fs.sh
-      snapshot_fs_begin "${job}" "${f}" ;;
+      snapshot_fs_begin "${job}" "${f}"
+      ;;
     *)
-      die "${EX_PRECOND}" "Unknown quiesce mode: ${JOB_QUIESCE}" ;;
+      die "${EX_PRECOND}" "Unknown quiesce mode: ${JOB_QUIESCE}"
+      ;;
   esac
 }
 
 _quiesce_docker_pause() {
-  local job="$1" f="$2"; shift 2
+  local job="$1" f="$2"
+  shift 2
   local -a ids=()
   mapfile -t ids < <(docker ps -q "$@" 2>/dev/null || true)
 
@@ -175,7 +180,10 @@ _quiesce_service_stop() {
 quiesce_end() {
   local job="${1:-${BGB_JOB}}" f
   f="$(quiesce_state_file "${job}")"
-  [ -f "${f}" ] || { _BGB_QUIESCE_ACTIVE=0; return 0; }
+  [ -f "${f}" ] || {
+    _BGB_QUIESCE_ACTIVE=0
+    return 0
+  }
 
   # Deliberately parsed rather than sourced: this file is read by a recovery
   # path that may run with a different (or no) configuration loaded, and it must
@@ -187,13 +195,14 @@ quiesce_end() {
   local st_mode="" st_ids="" st_units="" st_started="" st_snapshot="" st_mountpoint=""
   local line key value
   while IFS= read -r line || [ -n "${line}" ]; do
-    key="${line%%=*}"; value="${line#*=}"
+    key="${line%%=*}"
+    value="${line#*=}"
     case "${key}" in
-      mode)       st_mode="${value}" ;;
-      ids)        st_ids="${value}" ;;
-      units)      st_units="${value}" ;;
-      started)    st_started="${value}" ;;
-      snapshot)   st_snapshot="${value}" ;;
+      mode) st_mode="${value}" ;;
+      ids) st_ids="${value}" ;;
+      units) st_units="${value}" ;;
+      started) st_started="${value}" ;;
+      snapshot) st_snapshot="${value}" ;;
       mountpoint) st_mountpoint="${value}" ;;
     esac
   done <"${f}"
@@ -206,7 +215,8 @@ quiesce_end() {
         # shellcheck disable=SC2086
         docker unpause ${st_ids} >/dev/null 2>&1 \
           || warn "docker unpause failed for: ${st_ids} - check with 'docker ps -a'"
-      fi ;;
+      fi
+      ;;
     service-stop)
       if [ -n "${st_units}" ]; then
         log "Starting unit(s): ${st_units}"
@@ -218,19 +228,22 @@ quiesce_end() {
           err "MANUAL ACTION REQUIRED: systemctl start ${st_units}"
           BGB_RUN_DEGRADED_REASON="failed to restart ${st_units}"
         fi
-      fi ;;
-    lvm|btrfs|zfs)
+      fi
+      ;;
+    lvm | btrfs | zfs)
       lib_source snapshot_fs.sh 2>/dev/null || true
       if declare -F snapshot_fs_end >/dev/null 2>&1; then
-        snapshot_fs_end "${st_snapshot}" "${st_mountpoint}" || \
-          warn "Failed to clean up the filesystem snapshot: ${st_snapshot}"
-      fi ;;
+        snapshot_fs_end "${st_snapshot}" "${st_mountpoint}" \
+          || warn "Failed to clean up the filesystem snapshot: ${st_snapshot}"
+      fi
+      ;;
     '')
-      debug "Quiesce state file had no mode - nothing to reverse" ;;
+      debug "Quiesce state file had no mode - nothing to reverse"
+      ;;
   esac
 
   if [ -n "${st_started}" ]; then
-    local dur=$(( $(now_epoch) - st_started ))
+    local dur=$(($(now_epoch) - st_started))
     [ "${dur}" -ge 0 ] && BGB_RUN_QUIESCE_SECONDS="${dur}"
     log "Quiesce window: ${dur}s"
   fi
@@ -256,7 +269,7 @@ quiesce_cleanup_handler() {
 quiesce_check_deadline() {
   [ "${_BGB_QUIESCE_ACTIVE}" -eq 1 ] || return 0
   [ "${JOB_QUIESCE_MAX_SECONDS:-0}" -gt 0 ] || return 0
-  local elapsed=$(( $(now_epoch) - _BGB_QUIESCE_START ))
+  local elapsed=$(($(now_epoch) - _BGB_QUIESCE_START))
   if [ "${elapsed}" -ge "${JOB_QUIESCE_MAX_SECONDS}" ]; then
     err "Quiesce window exceeded ${JOB_QUIESCE_MAX_SECONDS}s (${elapsed}s elapsed)"
     err "Aborting the backup and restoring service - a missed backup beats an outage"

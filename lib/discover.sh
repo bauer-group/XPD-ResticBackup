@@ -24,8 +24,14 @@ cmd_discover() {
   local write=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --write) write=1; shift ;;
-      -*) err "Unknown flag for discover: $1"; exit "${EX_USAGE}" ;;
+      --write)
+        write=1
+        shift
+        ;;
+      -*)
+        err "Unknown flag for discover: $1"
+        exit "${EX_USAGE}"
+        ;;
       *) shift ;;
     esac
   done
@@ -93,16 +99,18 @@ discover_snapshot_capability() {
       found=1
       printf '  lvm          VG %-16s %s free\n' "${vg}" "${free}"
       case "${free}" in
-        0*|"") printf '    %s!%s no free extents - an LVM snapshot cannot be created\n' "${C_YELLOW}" "${C_RESET}" ;;
+        0* | "") printf '    %s!%s no free extents - an LVM snapshot cannot be created\n' "${C_YELLOW}" "${C_RESET}" ;;
       esac
     done < <(vgs --noheadings -o vg_name,vg_free --units g 2>/dev/null | awk '{print $1, $2}')
   fi
 
   if have btrfs && btrfs filesystem show >/dev/null 2>&1; then
-    found=1; printf '  btrfs        available\n'
+    found=1
+    printf '  btrfs        available\n'
   fi
   if have zfs && zfs list >/dev/null 2>&1; then
-    found=1; printf '  zfs          available\n'
+    found=1
+    printf '  zfs          available\n'
   fi
 
   if [ "${found}" -eq 0 ]; then
@@ -112,9 +120,13 @@ discover_snapshot_capability() {
 }
 
 discover_docker() {
-  have docker || { printf '\n%sDocker%s\n  not installed\n' "${C_BOLD}" "${C_RESET}"; return 0; }
+  have docker || {
+    printf '\n%sDocker%s\n  not installed\n' "${C_BOLD}" "${C_RESET}"
+    return 0
+  }
   if ! docker info >/dev/null 2>&1; then
-    printf '\n%sDocker%s\n  daemon not reachable\n' "${C_BOLD}" "${C_RESET}"; return 0
+    printf '\n%sDocker%s\n  daemon not reachable\n' "${C_BOLD}" "${C_RESET}"
+    return 0
   fi
   require_jq
 
@@ -123,8 +135,10 @@ discover_docker() {
     "$(docker version --format '{{.Server.Version}}' 2>/dev/null)" \
     "$(docker info --format '{{.Driver}}' 2>/dev/null)"
 
-  local projects; projects="$(docker compose ls --all --format json 2>/dev/null || echo '[]')"
-  local n; n="$(printf '%s' "${projects}" | jq 'length')"
+  local projects
+  projects="$(docker compose ls --all --format json 2>/dev/null || echo '[]')"
+  local n
+  n="$(printf '%s' "${projects}" | jq 'length')"
   printf '  projects     %s\n' "${n}"
 
   local p
@@ -147,7 +161,7 @@ discover_docker() {
       printf '    paths      %s\n' "${#paths[@]} host path(s) would be backed up"
       local q
       for q in "${paths[@]:0:8}"; do printf '               %s\n' "${q}"; done
-      [ "${#paths[@]}" -gt 8 ] && printf '               ... and %s more\n' "$(( ${#paths[@]} - 8 ))"
+      [ "${#paths[@]}" -gt 8 ] && printf '               ... and %s more\n' "$((${#paths[@]} - 8))"
     fi
   done < <(printf '%s' "${projects}" | jq -r '.[].Name // empty')
 
@@ -162,7 +176,7 @@ discover_docker() {
     [ -n "${tag}" ] || continue
     if ! docker image inspect "${tag}" 2>/dev/null | jq -e '.[0].RepoDigests[0]' >/dev/null 2>&1; then
       printf '    %s!%s %s (built locally, never pushed)\n' "${C_YELLOW}" "${C_RESET}" "${tag}"
-      missing=$(( missing + 1 ))
+      missing=$((missing + 1))
     fi
   done < <(docker ps -q 2>/dev/null || true)
   if [ "${missing}" -eq 0 ]; then
@@ -181,7 +195,7 @@ discover_databases() {
 
   # discover runs before any job is loaded, so give the planner a permissive
   # default rather than an empty engine list.
-  JOB_DB_ENGINES=( postgres mariadb mysql mongodb redis influxdb clickhouse elasticsearch mssql )
+  JOB_DB_ENGINES=(postgres mariadb mysql mongodb redis influxdb clickhouse elasticsearch mssql)
   JOB_DB_EXCLUDE_CONTAINERS=()
 
   local -a plan=()
@@ -214,11 +228,14 @@ discover_sizes() {
     sz="$(du -sb "${p}" 2>/dev/null | awk '{print $1}')"
     [ -n "${sz}" ] || continue
     printf '  %-16s %s\n' "${p}" "$(human_bytes "${sz}")"
-    total=$(( total + sz ))
+    total=$((total + sz))
   done
   if [ -d /var/lib/docker/volumes ]; then
     sz="$(du -sb /var/lib/docker/volumes 2>/dev/null | awk '{print $1}')"
-    [ -n "${sz}" ] && { printf '  %-16s %s\n' "docker volumes" "$(human_bytes "${sz}")"; total=$(( total + sz )); }
+    [ -n "${sz}" ] && {
+      printf '  %-16s %s\n' "docker volumes" "$(human_bytes "${sz}")"
+      total=$((total + sz))
+    }
   fi
   printf '  %-16s %s (before deduplication and compression)\n' "TOTAL" "$(human_bytes "${total}")"
 }
@@ -235,7 +252,8 @@ discover_write_proposals() {
   local f target
   for f in "${src}"/*.conf.example; do
     [ -e "${f}" ] || continue
-    local base; base="$(basename "${f}" .conf.example)"
+    local base
+    base="$(basename "${f}" .conf.example)"
     [ "${base}" = "20-docker" ] && [ "${has_docker}" -eq 0 ] && continue
     target="${out}/${base}.conf"
     if [ -e "${target}" ]; then
@@ -276,7 +294,7 @@ discover_json() {
   if have docker && docker info >/dev/null 2>&1; then
     projects="$(docker compose ls --all --format json 2>/dev/null || echo '[]')"
     lib_source db.sh
-    JOB_DB_ENGINES=( postgres mariadb mysql mongodb redis influxdb clickhouse elasticsearch mssql )
+    JOB_DB_ENGINES=(postgres mariadb mysql mongodb redis influxdb clickhouse elasticsearch mssql)
     JOB_DB_EXCLUDE_CONTAINERS=()
     dbs='['
     local first=1 line c name engine tier

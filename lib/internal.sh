@@ -48,15 +48,17 @@ cmd_internal() {
   local sub="${1:-}"
   [ $# -gt 0 ] && shift
   case "${sub}" in
-    unquiesce)      internal_unquiesce "$@" ;;
+    unquiesce) internal_unquiesce "$@" ;;
     notify-failure) internal_notify_failure "$@" ;;
-    ''|help|--help|-h)
+    '' | help | --help | -h)
       internal_usage
-      exit "${EX_USAGE}" ;;
+      exit "${EX_USAGE}"
+      ;;
     *)
       err "Unknown internal subcommand: ${sub}"
       internal_usage
-      exit "${EX_USAGE}" ;;
+      exit "${EX_USAGE}"
+      ;;
   esac
 }
 
@@ -94,10 +96,10 @@ EOF
 internal_normalise_unit() {
   local u="$1"
   case "${u}" in
-    '')                      printf '' ;;
-    *.service|*.timer)       printf '%s' "${u}" ;;
-    bg-backup@*|bg-backup-*) printf '%s.service' "${u}" ;;
-    *)                       printf 'bg-backup@%s.service' "${u}" ;;
+    '') printf '' ;;
+    *.service | *.timer) printf '%s' "${u}" ;;
+    bg-backup@* | bg-backup-*) printf '%s.service' "${u}" ;;
+    *) printf 'bg-backup@%s.service' "${u}" ;;
   esac
 }
 
@@ -107,7 +109,8 @@ internal_job_from_unit() {
   case "${u}" in
     bg-backup@*)
       rest="${u#bg-backup@}"
-      printf '%s' "${rest%.service}" ;;
+      printf '%s' "${rest%.service}"
+      ;;
     *) printf '' ;;
   esac
 }
@@ -120,7 +123,8 @@ internal_command_from_unit() {
     bg-backup-*)
       rest="${u#bg-backup-}"
       rest="${rest%.service}"
-      printf '%s' "${rest%.timer}" ;;
+      printf '%s' "${rest%.timer}"
+      ;;
     *) printf 'unknown' ;;
   esac
 }
@@ -162,12 +166,21 @@ internal_unquiesce() {
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --job)       [ $# -ge 2 ] || die "${EX_USAGE}" "--job requires an argument"
-                   job="$2"; shift 2 ;;
-      --job=*)     job="${1#*=}"; shift ;;
-      --if-needed) if_needed=1; shift ;;
-      '')          shift ;;
-      *)           die "${EX_USAGE}" "internal unquiesce: unexpected argument '$1'" ;;
+      --job)
+        [ $# -ge 2 ] || die "${EX_USAGE}" "--job requires an argument"
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
+      --if-needed)
+        if_needed=1
+        shift
+        ;;
+      '') shift ;;
+      *) die "${EX_USAGE}" "internal unquiesce: unexpected argument '$1'" ;;
     esac
   done
 
@@ -224,9 +237,9 @@ internal_replay_records() {
 
   mapfile -t lines <"${file}"
 
-  for (( i=${#lines[@]}-1; i>=0; i-- )); do
+  for ((i = ${#lines[@]} - 1; i >= 0; i--)); do
     line="${lines[i]}"
-    case "${line}" in ''|'#'*) continue ;; esac
+    case "${line}" in '' | '#'*) continue ;; esac
 
     verb="${line%%$'\t'*}"
     arg="${line#*$'\t'}"
@@ -234,11 +247,11 @@ internal_replay_records() {
 
     case "${verb}" in
       docker-unpause) _internal_docker_unpause "${arg}" || rc="${EX_FAIL}" ;;
-      docker-start)   _internal_docker_start   "${arg}" || rc="${EX_FAIL}" ;;
-      systemd-start)  _internal_systemd_start  "${arg}" || rc="${EX_FAIL}" ;;
-      fsfreeze-thaw)  _internal_fsfreeze_thaw  "${arg}" || rc="${EX_FAIL}" ;;
-      umount)         _internal_umount         "${arg}" || rc="${EX_FAIL}" ;;
-      lvremove)       _internal_lvremove       "${arg}" || rc="${EX_FAIL}" ;;
+      docker-start) _internal_docker_start "${arg}" || rc="${EX_FAIL}" ;;
+      systemd-start) _internal_systemd_start "${arg}" || rc="${EX_FAIL}" ;;
+      fsfreeze-thaw) _internal_fsfreeze_thaw "${arg}" || rc="${EX_FAIL}" ;;
+      umount) _internal_umount "${arg}" || rc="${EX_FAIL}" ;;
+      lvremove) _internal_lvremove "${arg}" || rc="${EX_FAIL}" ;;
       *)
         # A record we do not understand means this build and the writer of the
         # journal disagree. That is a bug, and it is reported as a failure
@@ -246,7 +259,8 @@ internal_replay_records() {
         # nothing stays paused or stopped, and "I skipped a line I could not
         # read" is indistinguishable from "the stack is still down".
         err "Unknown quiesce record '${verb}' - cannot undo it automatically"
-        rc="${EX_FAIL}" ;;
+        rc="${EX_FAIL}"
+        ;;
     esac
   done
   return "${rc}"
@@ -259,7 +273,10 @@ internal_replay_records() {
 _internal_docker_unpause() {
   local c="$1" paused
   [ -n "${c}" ] || return 0
-  have docker || { err "docker is not installed - cannot unpause ${c}"; return 1; }
+  have docker || {
+    err "docker is not installed - cannot unpause ${c}"
+    return 1
+  }
 
   if docker unpause "${c}" >/dev/null 2>&1; then
     log "unpaused container ${c}"
@@ -267,16 +284,28 @@ _internal_docker_unpause() {
   fi
   paused="$(docker inspect -f '{{.State.Paused}}' "${c}" 2>/dev/null || echo unknown)"
   case "${paused}" in
-    false)   debug "container ${c} was not paused"; return 0 ;;
-    unknown) warn "container ${c} no longer exists - nothing to unpause"; return 0 ;;
-    *)       err "container ${c} is still paused"; return 1 ;;
+    false)
+      debug "container ${c} was not paused"
+      return 0
+      ;;
+    unknown)
+      warn "container ${c} no longer exists - nothing to unpause"
+      return 0
+      ;;
+    *)
+      err "container ${c} is still paused"
+      return 1
+      ;;
   esac
 }
 
 _internal_docker_start() {
   local c="$1" running
   [ -n "${c}" ] || return 0
-  have docker || { err "docker is not installed - cannot start ${c}"; return 1; }
+  have docker || {
+    err "docker is not installed - cannot start ${c}"
+    return 1
+  }
 
   if docker start "${c}" >/dev/null 2>&1; then
     log "started container ${c}"
@@ -284,16 +313,28 @@ _internal_docker_start() {
   fi
   running="$(docker inspect -f '{{.State.Running}}' "${c}" 2>/dev/null || echo unknown)"
   case "${running}" in
-    true)    debug "container ${c} was already running"; return 0 ;;
-    unknown) err "container ${c} no longer exists and could not be started"; return 1 ;;
-    *)       err "container ${c} is still stopped"; return 1 ;;
+    true)
+      debug "container ${c} was already running"
+      return 0
+      ;;
+    unknown)
+      err "container ${c} no longer exists and could not be started"
+      return 1
+      ;;
+    *)
+      err "container ${c} is still stopped"
+      return 1
+      ;;
   esac
 }
 
 _internal_systemd_start() {
   local unit="$1"
   [ -n "${unit}" ] || return 0
-  have systemctl || { err "systemctl is not available - cannot start ${unit}"; return 1; }
+  have systemctl || {
+    err "systemctl is not available - cannot start ${unit}"
+    return 1
+  }
 
   # No --no-block: we want to know whether it actually came up. This runs inside
   # ExecStopPost=, which is bounded by TimeoutStopSec= in the unit.
@@ -312,7 +353,10 @@ _internal_systemd_start() {
 _internal_fsfreeze_thaw() {
   local mp="$1"
   [ -n "${mp}" ] || return 0
-  have fsfreeze || { warn "fsfreeze not installed - cannot thaw ${mp}"; return 0; }
+  have fsfreeze || {
+    warn "fsfreeze not installed - cannot thaw ${mp}"
+    return 0
+  }
   # An already-thawed filesystem returns EINVAL. That is the state we want, so
   # it is not an error - but a filesystem that is genuinely still frozen blocks
   # every write on the host, so anything else is fatal.
@@ -327,7 +371,10 @@ _internal_fsfreeze_thaw() {
 _internal_umount() {
   local mp="$1"
   [ -n "${mp}" ] || return 0
-  mountpoint -q "${mp}" 2>/dev/null || { debug "${mp} is not mounted"; return 0; }
+  mountpoint -q "${mp}" 2>/dev/null || {
+    debug "${mp} is not mounted"
+    return 0
+  }
 
   if umount "${mp}" >/dev/null 2>&1; then
     log "unmounted ${mp}"
@@ -348,7 +395,10 @@ _internal_umount() {
 _internal_lvremove() {
   local lv="$1" attr
   [ -n "${lv}" ] || return 0
-  have lvremove || { err "lvm2 is not installed - cannot remove ${lv}"; return 1; }
+  have lvremove || {
+    err "lvm2 is not installed - cannot remove ${lv}"
+    return 1
+  }
 
   # SAFETY RAIL, and it is not optional. This function deletes a logical volume
   # on the say-so of a file in /run. A corrupted or hand-edited journal must not
@@ -362,11 +412,12 @@ _internal_lvremove() {
     return 0
   fi
   case "${attr}" in
-    s*|S*) : ;;
+    s* | S*) : ;;
     *)
       err "REFUSING to remove ${lv}: LVM reports attributes '${attr}', which is not a snapshot"
       err "Remove it by hand if it really is backup scratch: lvremove ${lv}"
-      return 1 ;;
+      return 1
+      ;;
   esac
 
   if lvremove -f "${lv}" >/dev/null 2>&1; then
@@ -386,12 +437,24 @@ internal_notify_failure() {
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --unit)   [ $# -ge 2 ] || die "${EX_USAGE}" "--unit requires an argument"
-                unit_arg="$2"; shift 2 ;;
-      --unit=*) unit_arg="${1#*=}"; shift ;;
-      --force)  force=1; shift ;;
-      '')       shift ;;
-      *)        warn "internal notify-failure: ignoring unexpected argument '$1'"; shift ;;
+      --unit)
+        [ $# -ge 2 ] || die "${EX_USAGE}" "--unit requires an argument"
+        unit_arg="$2"
+        shift 2
+        ;;
+      --unit=*)
+        unit_arg="${1#*=}"
+        shift
+        ;;
+      --force)
+        force=1
+        shift
+        ;;
+      '') shift ;;
+      *)
+        warn "internal notify-failure: ignoring unexpected argument '$1'"
+        shift
+        ;;
     esac
   done
 
@@ -411,7 +474,7 @@ internal_notify_failure() {
   # Load the configuration for BGB_MONITOR_*, but survive a broken one: the
   # backup may well have failed BECAUSE the configuration is broken, and that is
   # the single most important failure to be told about.
-  if ( config_load ) >/dev/null 2>&1; then
+  if (config_load) >/dev/null 2>&1; then
     config_load
   else
     warn "Main configuration does not load - notifying with built-in defaults"
@@ -436,20 +499,24 @@ internal_notify_failure() {
   redact_register_env
 
   # --- what systemd knows -----------------------------------------------------
-  result=""; main_status=""; main_code=""; invocation=""; ended=""
+  result=""
+  main_status=""
+  main_code=""
+  invocation=""
+  ended=""
   if have systemctl; then
     local k v
     while IFS='=' read -r k v; do
       case "${k}" in
-        Result)                 result="${v}" ;;
-        ExecMainStatus)         main_status="${v}" ;;
-        ExecMainCode)           main_code="${v}" ;;
-        InvocationID)           invocation="${v}" ;;
+        Result) result="${v}" ;;
+        ExecMainStatus) main_status="${v}" ;;
+        ExecMainCode) main_code="${v}" ;;
+        InvocationID) invocation="${v}" ;;
         InactiveEnterTimestamp) ended="${v}" ;;
       esac
     done < <(systemctl show "${unit}" \
-               -p Result -p ExecMainStatus -p ExecMainCode \
-               -p InvocationID -p InactiveEnterTimestamp 2>/dev/null || true)
+      -p Result -p ExecMainStatus -p ExecMainCode \
+      -p InvocationID -p InactiveEnterTimestamp 2>/dev/null || true)
   fi
   [ -n "${result}" ] || result="unknown"
   [ -n "${main_status}" ] || main_status="?"
@@ -516,7 +583,7 @@ _internal_tool_already_notified() {
   local result="$1" status="$2"
   [ "${result}" = "exit-code" ] || return 1
   case "${status}" in
-    1|2|3|4|5|6|7|8|9) return 0 ;;
+    1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -526,29 +593,40 @@ _internal_explain_result() {
   case "${result}" in
     oom-kill)
       printf 'The kernel OOM killer terminated this run. No cleanup code of ours ran;\n'
-      printf 'ExecStopPost= has undone the quiesce. Reduce concurrency or add memory.' ;;
+      printf 'ExecStopPost= has undone the quiesce. Reduce concurrency or add memory.'
+      ;;
     timeout)
       printf 'RuntimeMaxSec (JOB_TIMEOUT) expired and systemd killed the run.\n'
-      printf 'Either the job genuinely needs longer or it is stuck on the backend.' ;;
+      printf 'Either the job genuinely needs longer or it is stuck on the backend.'
+      ;;
     signal)
       printf 'The process was killed by a signal (shutdown, manual kill, or the\n'
       printf 'watchdog). No in-process notification could be sent, which is why\n'
-      printf 'this message exists.' ;;
+      printf 'this message exists.'
+      ;;
     core-dump)
       printf 'The process dumped core. Treat this as a tool bug and report it with\n'
-      printf 'the journal excerpt below.' ;;
+      printf 'the journal excerpt below.'
+      ;;
     start-limit-hit)
-      printf 'systemd refused to start the unit again after repeated failures.' ;;
+      printf 'systemd refused to start the unit again after repeated failures.'
+      ;;
     exit-code)
       case "${status}" in
-        126|127) printf 'The bg-backup binary could not be executed (exit %s). A broken install\n' "${status}"
-                 printf 'or a half-finished self-update - check /opt/bg-backup/current.' ;;
-        130)     printf 'Interrupted (SIGINT). Cleanup ran, but no notification was sent from\n'
-                 printf 'inside the process.' ;;
-        *)       printf 'The process exited %s without reaching its own reporting path.' "${status}" ;;
-      esac ;;
+        126 | 127)
+          printf 'The bg-backup binary could not be executed (exit %s). A broken install\n' "${status}"
+          printf 'or a half-finished self-update - check /opt/bg-backup/current.'
+          ;;
+        130)
+          printf 'Interrupted (SIGINT). Cleanup ran, but no notification was sent from\n'
+          printf 'inside the process.'
+          ;;
+        *) printf 'The process exited %s without reaching its own reporting path.' "${status}" ;;
+      esac
+      ;;
     *)
-      printf 'systemd reported result "%s" with exit status %s.' "${result}" "${status}" ;;
+      printf 'systemd reported result "%s" with exit status %s.' "${result}" "${status}"
+      ;;
   esac
 }
 
@@ -582,8 +660,8 @@ _internal_dispatch_notification() {
   export BGB_NOTIFY_COMMAND="${command}"
 
   if declare -F monitor_notify >/dev/null 2>&1; then
-    monitor_notify failed "${job}" "${status}" "${subject}" "${body}" || \
-      warn "The notifier chain reported an error; the failure is recorded in the journal and the event log"
+    monitor_notify failed "${job}" "${status}" "${subject}" "${body}" \
+      || warn "The notifier chain reported an error; the failure is recorded in the journal and the event log"
     return 0
   fi
 

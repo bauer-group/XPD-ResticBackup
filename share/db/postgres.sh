@@ -183,7 +183,8 @@ _db_postgres_script() {
 
 # _db_postgres_sh <container> <script> [args...]
 _db_postgres_sh() {
-  local c="$1" script="$2"; shift 2
+  local c="$1" script="$2"
+  shift 2
   docker exec -i "${c}" sh -c "${script}" _ "$@"
 }
 
@@ -205,21 +206,21 @@ db_postgres_detect() {
   [ -n "${image}" ] || return 1
 
   case "${image}" in
-    *exporter*|*pgbouncer*|*pgpool*|*pgcat*|*pgadmin*|*backrest*|*barman*) return 1 ;;
+    *exporter* | *pgbouncer* | *pgpool* | *pgcat* | *pgadmin* | *backrest* | *barman*) return 1 ;;
   esac
   case "${image}" in
-    *postgres*|*postgis*|*timescale*|*pgvector*|*pgvecto*|*citus*|*paradedb*|*cloudnative-pg*|*supabase*) : ;;
+    *postgres* | *postgis* | *timescale* | *pgvector* | *pgvecto* | *citus* | *paradedb* | *cloudnative-pg* | *supabase*) : ;;
     *) return 1 ;;
   esac
 
   # Env names only - the values are never assigned to a shell variable, so a
   # password cannot end up in a bg-backup stack trace or an `xtrace` log.
   if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${c}" 2>/dev/null \
-     | cut -d= -f1 | grep -qxE 'POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|PGDATA|POSTGRESQL_PASSWORD'; then
+    | cut -d= -f1 | grep -qxE 'POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|PGDATA|POSTGRESQL_PASSWORD'; then
     return 0
   fi
   if docker inspect --format '{{range $p, $v := .Config.ExposedPorts}}{{println $p}}{{end}}' "${c}" 2>/dev/null \
-     | grep -qx '5432/tcp'; then
+    | grep -qx '5432/tcp'; then
     return 0
   fi
   return 1
@@ -261,7 +262,8 @@ _db_postgres_argv() {
 #                          would corrupt every byte-exact dump (custom format,
 #                          RDB, .bak) in a way that only surfaces at restore.
 _db_postgres_run() {
-  local job="$1" run="$2" name="$3" tag="$4"; shift 4
+  local job="$1" run="$2" name="$3" tag="$4"
+  shift 4
   [ "${1:-}" = "--" ] && shift
 
   local log rc=0
@@ -271,7 +273,7 @@ _db_postgres_run() {
   mapfile -t argv < <(_db_postgres_argv "${job}" "${run}" "${name}" "${tag}")
   argv+=(timeout "${JOB_DB_DUMP_TIMEOUT:-3600}" "$@")
 
-  BGB_RUN_DB_DUMPS=$(( ${BGB_RUN_DB_DUMPS:-0} + 1 ))
+  BGB_RUN_DB_DUMPS=$((${BGB_RUN_DB_DUMPS:-0} + 1))
   restic_exec_logged "${log}" "${argv[@]}" || rc=$?
   BGB_DB_LAST_LOG="${log}"
 
@@ -279,7 +281,7 @@ _db_postgres_run() {
   # there is exactly one source, and a partially read database dump is not a
   # database dump.
   if [ "${rc}" -ne 0 ]; then
-    BGB_RUN_DB_DUMPS_FAILED=$(( ${BGB_RUN_DB_DUMPS_FAILED:-0} + 1 ))
+    BGB_RUN_DB_DUMPS_FAILED=$((${BGB_RUN_DB_DUMPS_FAILED:-0} + 1))
     err "postgres: ${name} failed (restic rc=${rc}: $(restic_explain_rc "${rc}"))"
     return "${EX_FAIL}"
   fi
@@ -314,7 +316,7 @@ db_postgres_dump() {
   # snapshot count of the run it belongs to.
   script="$(_db_postgres_script "${_DB_PG_GLOBALS_SH}")"
   if ! _db_postgres_run "${job}" "${run}" "/db/postgres/${c}/globals.sql" "part=globals" \
-       -- docker exec -i "${c}" sh -c "${script}" _; then
+    -- docker exec -i "${c}" sh -c "${script}" _; then
     BGB_DB_RESULT="failed"
     BGB_DB_RESULT_REASON="pg_dumpall --globals-only failed"
     return "${EX_FAIL}"
@@ -429,11 +431,16 @@ EOS
 _db_postgres_counts_json() {
   local c="$1" src="$2" key val first=1
   printf '{'
-  json_kv engine postgres; printf ','
-  json_kv container "${c}"; printf ','
-  json_kv taken "$(now_iso)"; printf ','
-  json_kv source "${src}"; printf ','
-  json_kvraw exact true; printf ','
+  json_kv engine postgres
+  printf ','
+  json_kv container "${c}"
+  printf ','
+  json_kv taken "$(now_iso)"
+  printf ','
+  json_kv source "${src}"
+  printf ','
+  json_kvraw exact true
+  printf ','
   printf '"objects":{'
   while IFS='|' read -r key val; do
     [ -n "${key}" ] || continue
@@ -484,7 +491,8 @@ db_postgres_restore() {
         docker exec -i "${c}" sh -c "${script}" _ "${target}" || rc=$?
       else
         docker exec -i "${c}" sh -c "${script}" _ "${target}" <"${file}" || rc=$?
-      fi ;;
+      fi
+      ;;
     sql)
       log "postgres: psql into ${c}:${target}"
       script="$(_db_postgres_script "${_DB_PG_RESTORE_SQL_SH}")"
@@ -492,9 +500,11 @@ db_postgres_restore() {
         docker exec -i "${c}" sh -c "${script}" _ "${target}" || rc=$?
       else
         docker exec -i "${c}" sh -c "${script}" _ "${target}" <"${file}" || rc=$?
-      fi ;;
+      fi
+      ;;
     *)
-      die "${EX_USAGE}" "postgres: unknown BGB_DB_RESTORE_FORMAT '${fmt}' (sql|custom|auto)" ;;
+      die "${EX_USAGE}" "postgres: unknown BGB_DB_RESTORE_FORMAT '${fmt}' (sql|custom|auto)"
+      ;;
   esac
 
   [ "${rc}" -eq 0 ] || err "postgres: restore failed (rc=${rc})"

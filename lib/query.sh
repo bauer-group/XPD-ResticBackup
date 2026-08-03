@@ -26,15 +26,42 @@ cmd_snapshots() {
   local job="" tag="" last="" all_hosts=0 show_paths=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --job)     job="$2"; shift 2 ;;
-      --job=*)   job="${1#*=}"; shift ;;
-      --tag)     tag="$2"; shift 2 ;;
-      --tag=*)   tag="${1#*=}"; shift ;;
-      --last)    last="$2"; shift 2 ;;
-      --last=*)  last="${1#*=}"; shift ;;
-      --all-hosts) all_hosts=1; shift ;;
-      --paths)   show_paths=1; shift ;;
-      -*) err "Unknown flag for snapshots: $1"; exit "${EX_USAGE}" ;;
+      --job)
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
+      --tag)
+        tag="$2"
+        shift 2
+        ;;
+      --tag=*)
+        tag="${1#*=}"
+        shift
+        ;;
+      --last)
+        last="$2"
+        shift 2
+        ;;
+      --last=*)
+        last="${1#*=}"
+        shift
+        ;;
+      --all-hosts)
+        all_hosts=1
+        shift
+        ;;
+      --paths)
+        show_paths=1
+        shift
+        ;;
+      -*)
+        err "Unknown flag for snapshots: $1"
+        exit "${EX_USAGE}"
+        ;;
       *) shift ;;
     esac
   done
@@ -64,7 +91,8 @@ cmd_snapshots() {
 
   local json
   json="$(restic_capture "${args[@]}" --json)" || return "${EX_REPO}"
-  local n; n="$(printf '%s' "${json}" | jq 'length')"
+  local n
+  n="$(printf '%s' "${json}" | jq 'length')"
   if [ "${n}" = "0" ]; then
     log "No snapshots match"
     return 0
@@ -79,7 +107,7 @@ cmd_snapshots() {
       ((.tags // []) | map(select(startswith("bg-backup=") | not)) | join(",")),
       ((.paths // []) | if $paths == 1 then join(",") else (.[0] // "") end)
     ] | @tsv' \
-  | while IFS=$'\t' read -r id time size tags paths; do
+    | while IFS=$'\t' read -r id time size tags paths; do
       printf '  %-10s %-20s %-10s %-26s %s\n' \
         "${id}" "${time}" "$(human_bytes "${size}")" "${tags:0:26}" "${paths}"
     done
@@ -90,12 +118,16 @@ cmd_snapshots() {
 # runs
 # -----------------------------------------------------------------------------
 cmd_runs() {
-  local sub="${1:-list}"; shift || true
+  local sub="${1:-list}"
+  shift || true
   case "${sub}" in
     list) runs_list "$@" ;;
     show) runs_show "$@" ;;
     diff) runs_diff "$@" ;;
-    *) err "Unknown subcommand: runs ${sub}"; exit "${EX_USAGE}" ;;
+    *)
+      err "Unknown subcommand: runs ${sub}"
+      exit "${EX_USAGE}"
+      ;;
   esac
 }
 
@@ -103,9 +135,18 @@ runs_list() {
   local job="" limit=20
   while [ $# -gt 0 ]; do
     case "$1" in
-      --job) job="$2"; shift 2 ;;
-      --job=*) job="${1#*=}"; shift ;;
-      --limit) limit="$2"; shift 2 ;;
+      --job)
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
+      --limit)
+        limit="$2"
+        shift 2
+        ;;
       *) shift ;;
     esac
   done
@@ -115,7 +156,8 @@ runs_list() {
   local -a args=(snapshots --host "${BGB_HOSTNAME}" --json)
   [ -n "${job}" ] && args+=(--tag "job=${job}")
 
-  local json; json="$(restic_capture "${args[@]}")" || return "${EX_REPO}"
+  local json
+  json="$(restic_capture "${args[@]}")" || return "${EX_REPO}"
 
   # Group by the run= tag. Snapshots without one predate this tool (or were made
   # by hand) and are listed under "-" rather than hidden.
@@ -140,8 +182,8 @@ runs_list() {
         kinds: (map(.kind) | unique | join(","))
       }) | sort_by(.time) | reverse | .[]
     | [.run, .job, (.n|tostring), .time, .kinds] | @tsv' 2>/dev/null \
-  | head -n "${limit}" \
-  | while IFS=$'\t' read -r run job n time kinds; do
+    | head -n "${limit}" \
+    | while IFS=$'\t' read -r run job n time kinds; do
       printf '  %-24s %-14s %-6s %-20s %s\n' "${run}" "${job}" "${n}" "${time}" "${kinds}"
     done
   printf '\n'
@@ -174,7 +216,8 @@ runs_diff() {
 # ls / find / diff / mount / stats / unlock
 # -----------------------------------------------------------------------------
 cmd_ls() {
-  local snap="${1:-latest}"; shift || true
+  local snap="${1:-latest}"
+  shift || true
   query_prepare
   local -a args=(ls "${snap}")
   [ $# -gt 0 ] && args+=("$@")
@@ -183,7 +226,8 @@ cmd_ls() {
 }
 
 cmd_find() {
-  local pattern="${1:-}"; shift || true
+  local pattern="${1:-}"
+  shift || true
   [ -n "${pattern}" ] || die "${EX_USAGE}" "usage: bg-backup find <pattern>"
   query_prepare
   local -a args=(find --host "${BGB_HOSTNAME}" "${pattern}")
@@ -222,10 +266,22 @@ cmd_stats() {
   local mode="restore-size" job=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --mode) mode="$2"; shift 2 ;;
-      --mode=*) mode="${1#*=}"; shift ;;
-      --job) job="$2"; shift 2 ;;
-      --job=*) job="${1#*=}"; shift ;;
+      --mode)
+        mode="$2"
+        shift 2
+        ;;
+      --mode=*)
+        mode="${1#*=}"
+        shift
+        ;;
+      --job)
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -240,7 +296,10 @@ cmd_unlock() {
   local remove_all=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --remove-all) remove_all=1; shift ;;
+      --remove-all)
+        remove_all=1
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -249,7 +308,8 @@ cmd_unlock() {
 
   # Show who holds the lock before removing it. Blindly unlocking a repository
   # another host is actively writing to is how a repository gets damaged.
-  local locks; locks="$(restic_capture list locks 2>/dev/null || true)"
+  local locks
+  locks="$(restic_capture list locks 2>/dev/null || true)"
   if [ -z "${locks}" ]; then
     log "No repository locks are held"
     return 0

@@ -157,20 +157,20 @@ db_mysql_detect() {
   [ -n "${image}" ] || return 1
 
   case "${image}" in
-    *exporter*|*proxysql*|*maxscale*|*phpmyadmin*|*adminer*|*orchestrator*) return 1 ;;
+    *exporter* | *proxysql* | *maxscale* | *phpmyadmin* | *adminer* | *orchestrator*) return 1 ;;
   esac
   case "${image}" in
-    *mysql*|*mariadb*|*percona*|*mytop*) : ;;
+    *mysql* | *mariadb* | *percona* | *mytop*) : ;;
     *) return 1 ;;
   esac
 
   if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${c}" 2>/dev/null \
-     | cut -d= -f1 \
-     | grep -qxE 'MYSQL_ROOT_PASSWORD|MARIADB_ROOT_PASSWORD|MYSQL_DATABASE|MARIADB_DATABASE|MYSQL_ALLOW_EMPTY_PASSWORD|MARIADB_ALLOW_EMPTY_ROOT_PASSWORD|MYSQL_RANDOM_ROOT_PASSWORD'; then
+    | cut -d= -f1 \
+    | grep -qxE 'MYSQL_ROOT_PASSWORD|MARIADB_ROOT_PASSWORD|MYSQL_DATABASE|MARIADB_DATABASE|MYSQL_ALLOW_EMPTY_PASSWORD|MARIADB_ALLOW_EMPTY_ROOT_PASSWORD|MYSQL_RANDOM_ROOT_PASSWORD'; then
     return 0
   fi
   if docker inspect --format '{{range $p, $v := .Config.ExposedPorts}}{{println $p}}{{end}}' "${c}" 2>/dev/null \
-     | grep -qx '3306/tcp'; then
+    | grep -qx '3306/tcp'; then
     return 0
   fi
   return 1
@@ -194,7 +194,8 @@ _db_mysql_argv() {
 # See postgres.sh for the full reasoning behind --stdin-from-command, the
 # timeout(1) prefix and the deliberate absence of `docker exec -t`.
 _db_mysql_run() {
-  local job="$1" run="$2" name="$3" tag="$4"; shift 4
+  local job="$1" run="$2" name="$3" tag="$4"
+  shift 4
   [ "${1:-}" = "--" ] && shift
 
   local log rc=0
@@ -204,12 +205,12 @@ _db_mysql_run() {
   mapfile -t argv < <(_db_mysql_argv "${job}" "${run}" "${name}" "${tag}")
   argv+=(timeout "${JOB_DB_DUMP_TIMEOUT:-3600}" "$@")
 
-  BGB_RUN_DB_DUMPS=$(( ${BGB_RUN_DB_DUMPS:-0} + 1 ))
+  BGB_RUN_DB_DUMPS=$((${BGB_RUN_DB_DUMPS:-0} + 1))
   restic_exec_logged "${log}" "${argv[@]}" || rc=$?
   BGB_DB_LAST_LOG="${log}"
 
   if [ "${rc}" -ne 0 ]; then
-    BGB_RUN_DB_DUMPS_FAILED=$(( ${BGB_RUN_DB_DUMPS_FAILED:-0} + 1 ))
+    BGB_RUN_DB_DUMPS_FAILED=$((${BGB_RUN_DB_DUMPS_FAILED:-0} + 1))
     err "mysql: ${name} failed (restic rc=${rc}: $(restic_explain_rc "${rc}"))"
     return "${EX_FAIL}"
   fi
@@ -236,7 +237,7 @@ db_mysql_dump() {
 
   version="$(_db_mysql_query "${c}" 'SELECT VERSION()' | head -n1 || true)"
   case "${version}" in
-    *MariaDB*|*mariadb*) flavour="mariadb" ;;
+    *MariaDB* | *mariadb*) flavour="mariadb" ;;
   esac
   debug "mysql: ${c} reports version '${version:-unknown}' (${flavour})"
 
@@ -311,11 +312,16 @@ db_mysql_counts() {
 
   local key val first=1
   printf '{'
-  json_kv engine mysql; printf ','
-  json_kv container "${c}"; printf ','
-  json_kv taken "$(now_iso)"; printf ','
-  json_kv source "adjacent-transaction"; printf ','
-  json_kvraw exact true; printf ','
+  json_kv engine mysql
+  printf ','
+  json_kv container "${c}"
+  printf ','
+  json_kv taken "$(now_iso)"
+  printf ','
+  json_kv source "adjacent-transaction"
+  printf ','
+  json_kvraw exact true
+  printf ','
   printf '"objects":{'
   while IFS=$'\t' read -r key val; do
     [ -n "${key}" ] || continue
@@ -371,8 +377,8 @@ db_mysql_restore() {
   # An --all-databases dump rewrites the grant tables. Until FLUSH PRIVILEGES
   # runs, the server keeps serving the in-memory copy from before the restore,
   # so a restored user appears not to exist.
-  _db_mysql_query "${c}" 'FLUSH PRIVILEGES' >/dev/null 2>&1 || \
-    warn "mysql: FLUSH PRIVILEGES failed - restart the container before testing logins"
+  _db_mysql_query "${c}" 'FLUSH PRIVILEGES' >/dev/null 2>&1 \
+    || warn "mysql: FLUSH PRIVILEGES failed - restart the container before testing logins"
   return 0
 }
 

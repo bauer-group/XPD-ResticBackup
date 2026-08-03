@@ -137,20 +137,20 @@ db_mongodb_detect() {
   [ -n "${image}" ] || return 1
 
   case "${image}" in
-    *exporter*|*mongo-express*|*mongoexpress*|*mongos*|*compass*) return 1 ;;
+    *exporter* | *mongo-express* | *mongoexpress* | *mongos* | *compass*) return 1 ;;
   esac
   case "${image}" in
-    *mongo*|*documentdb*|*ferretdb*) : ;;
+    *mongo* | *documentdb* | *ferretdb*) : ;;
     *) return 1 ;;
   esac
 
   if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${c}" 2>/dev/null \
-     | cut -d= -f1 \
-     | grep -qxE 'MONGO_INITDB_ROOT_USERNAME|MONGO_INITDB_ROOT_PASSWORD|MONGO_INITDB_DATABASE|MONGODB_ROOT_PASSWORD|MONGODB_REPLICA_SET_NAME'; then
+    | cut -d= -f1 \
+    | grep -qxE 'MONGO_INITDB_ROOT_USERNAME|MONGO_INITDB_ROOT_PASSWORD|MONGO_INITDB_DATABASE|MONGODB_ROOT_PASSWORD|MONGODB_REPLICA_SET_NAME'; then
     return 0
   fi
   if docker inspect --format '{{range $p, $v := .Config.ExposedPorts}}{{println $p}}{{end}}' "${c}" 2>/dev/null \
-     | grep -qx '27017/tcp'; then
+    | grep -qx '27017/tcp'; then
     return 0
   fi
   return 1
@@ -173,7 +173,8 @@ _db_mongodb_argv() {
 
 # See postgres.sh for why --stdin-from-command, timeout(1) and no `-t`.
 _db_mongodb_run() {
-  local job="$1" run="$2" name="$3" tag="$4"; shift 4
+  local job="$1" run="$2" name="$3" tag="$4"
+  shift 4
   [ "${1:-}" = "--" ] && shift
 
   local log rc=0
@@ -183,12 +184,12 @@ _db_mongodb_run() {
   mapfile -t argv < <(_db_mongodb_argv "${job}" "${run}" "${name}" "${tag}")
   argv+=(timeout "${JOB_DB_DUMP_TIMEOUT:-3600}" "$@")
 
-  BGB_RUN_DB_DUMPS=$(( ${BGB_RUN_DB_DUMPS:-0} + 1 ))
+  BGB_RUN_DB_DUMPS=$((${BGB_RUN_DB_DUMPS:-0} + 1))
   restic_exec_logged "${log}" "${argv[@]}" || rc=$?
   BGB_DB_LAST_LOG="${log}"
 
   if [ "${rc}" -ne 0 ]; then
-    BGB_RUN_DB_DUMPS_FAILED=$(( ${BGB_RUN_DB_DUMPS_FAILED:-0} + 1 ))
+    BGB_RUN_DB_DUMPS_FAILED=$((${BGB_RUN_DB_DUMPS_FAILED:-0} + 1))
     err "mongodb: ${name} failed (restic rc=${rc}: $(restic_explain_rc "${rc}"))"
     return "${EX_FAIL}"
   fi
@@ -210,7 +211,7 @@ db_mongodb_replset() {
   local c="$1" out
   out="$(_db_mongodb_eval "${c}" 'print(db.hello().setName || "")' | tr -d '\r' | tail -n1 || true)"
   case "${out}" in
-    *Error*|*error*|undefined|null) out="" ;;
+    *Error* | *error* | undefined | null) out="" ;;
   esac
   printf '%s' "${out}"
 }
@@ -270,14 +271,22 @@ db_mongodb_counts() {
   # jq - never with a regex. jq -c also validates it before it is embedded.
   require_jq
   compact="$(printf '%s' "${raw}" | jq -c '.' 2>/dev/null || true)"
-  [ -n "${compact}" ] || { warn "mongodb: ${c}: count output was not valid JSON - skipping"; return 0; }
+  [ -n "${compact}" ] || {
+    warn "mongodb: ${c}: count output was not valid JSON - skipping"
+    return 0
+  }
 
   printf '{'
-  json_kv engine mongodb; printf ','
-  json_kv container "${c}"; printf ','
-  json_kv taken "$(now_iso)"; printf ','
-  json_kv source "live"; printf ','
-  json_kvraw exact true; printf ','
+  json_kv engine mongodb
+  printf ','
+  json_kv container "${c}"
+  printf ','
+  json_kv taken "$(now_iso)"
+  printf ','
+  json_kv source "live"
+  printf ','
+  json_kvraw exact true
+  printf ','
   json_kvraw objects "${compact}"
   printf '}\n'
 }

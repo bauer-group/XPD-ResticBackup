@@ -16,8 +16,14 @@ cmd_status() {
   local job=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --job)   job="$2"; shift 2 ;;
-      --job=*) job="${1#*=}"; shift ;;
+      --job)
+        job="$2"
+        shift 2
+        ;;
+      --job=*)
+        job="${1#*=}"
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -29,7 +35,7 @@ cmd_status() {
   if [ -n "${job}" ]; then jobs=("${job}"); else mapfile -t jobs < <(config_list_jobs); fi
 
   local repo_ok=0 repo_locked=0
-  if [ -f "${BGB_REPO_ENV}" ] && ( repo_env_load ) >/dev/null 2>&1; then
+  if [ -f "${BGB_REPO_ENV}" ] && (repo_env_load) >/dev/null 2>&1; then
     repo_env_load >/dev/null 2>&1 || true
     if [ -x "${BGB_RESTIC_BIN}" ] && restic_repo_reachable; then
       repo_ok=1
@@ -55,7 +61,7 @@ status_worst_from_jobs() {
   local job rc=0
   for job in "$@"; do
     [ -n "${job}" ] || continue
-    ( config_load_job "${job}" ) >/dev/null 2>&1 || continue
+    (config_load_job "${job}") >/dev/null 2>&1 || continue
     config_load_job "${job}" >/dev/null 2>&1 || true
     [ "${JOB_ENABLED}" = "1" ] || continue
     state_sla_ok "${job}" "${JOB_ALERT_MAX_AGE_HOURS}" || rc="${EX_PARTIAL}"
@@ -64,7 +70,8 @@ status_worst_from_jobs() {
 }
 
 status_human() {
-  local repo_ok="$1" repo_locked="$2"; shift 2
+  local repo_ok="$1" repo_locked="$2"
+  shift 2
   local job status age sla snap dur bytes next timer
 
   printf '\n%sbg-backup status%s  %s\n\n' "${C_BOLD}" "${C_RESET}" "$(fqdn)"
@@ -89,7 +96,10 @@ status_human() {
 
   for job in "$@"; do
     [ -n "${job}" ] || continue
-    ( config_load_job "${job}" ) >/dev/null 2>&1 || { printf '  %-14s %sINVALID CONFIG%s\n' "${job}" "${C_RED}" "${C_RESET}"; continue; }
+    (config_load_job "${job}") >/dev/null 2>&1 || {
+      printf '  %-14s %sINVALID CONFIG%s\n' "${job}" "${C_RED}" "${C_RESET}"
+      continue
+    }
     config_load_job "${job}" >/dev/null 2>&1 || true
 
     if [ "${JOB_ENABLED}" != "1" ]; then
@@ -97,7 +107,8 @@ status_human() {
       continue
     fi
 
-    status="$(state_field "${job}" status)"; status="${status:-never}"
+    status="$(state_field "${job}" status)"
+    status="${status:-never}"
     age="$(state_age_hours "${job}")"
     sla="${JOB_ALERT_MAX_AGE_HOURS}"
     snap="$(state_field "${job}" snapshot_id)"
@@ -115,7 +126,7 @@ status_human() {
     case "${status}" in
       ok) colour="${C_GREEN}" ;;
       partial) colour="${C_YELLOW}" ;;
-      degraded|failed) colour="${C_RED}" ;;
+      degraded | failed) colour="${C_RED}" ;;
       never) colour="${C_DIM}" ;;
     esac
     if [ -n "${age}" ] && ! state_sla_ok "${job}" "${sla}"; then colour="${C_RED}"; fi
@@ -126,13 +137,15 @@ status_human() {
       "$([ -n "${dur}" ] && human_duration "${dur}" | sed 's/^0h //' || echo '-')" \
       "${next}"
 
-    local reason; reason="$(state_field "${job}" degraded_reason)"
+    local reason
+    reason="$(state_field "${job}" degraded_reason)"
     [ -n "${reason}" ] && printf '                 %s! %s%s\n' "${C_YELLOW}" "${reason}" "${C_RESET}"
-    [ -n "${bytes}" ] && [ "${bytes}" != "0" ] && \
-      printf '                 %sadded %s%s\n' "${C_DIM}" "$(human_bytes "${bytes}")" "${C_RESET}"
+    [ -n "${bytes}" ] && [ "${bytes}" != "0" ] \
+      && printf '                 %sadded %s%s\n' "${C_DIM}" "$(human_bytes "${bytes}")" "${C_RESET}"
   done
 
-  local locks; locks="$(lock_status 2>/dev/null || true)"
+  local locks
+  locks="$(lock_status 2>/dev/null || true)"
   if [ -n "${locks}" ]; then
     printf '\n%sActive locks%s\n' "${C_BOLD}" "${C_RESET}"
     printf '%s\n' "${locks}" | sed 's/^/  /'
@@ -141,7 +154,8 @@ status_human() {
 }
 
 status_json() {
-  local repo_ok="$1" repo_locked="$2"; shift 2
+  local repo_ok="$1" repo_locked="$2"
+  shift 2
   local job first=1 body verdict="ok"
 
   body='"repository":{'
@@ -157,7 +171,7 @@ status_json() {
 
   for job in "$@"; do
     [ -n "${job}" ] || continue
-    ( config_load_job "${job}" ) >/dev/null 2>&1 || continue
+    (config_load_job "${job}") >/dev/null 2>&1 || continue
     config_load_job "${job}" >/dev/null 2>&1 || true
     [ "${first}" -eq 0 ] && body+=","
     first=0
@@ -168,7 +182,7 @@ status_json() {
     local sla_ok=1
     state_sla_ok "${job}" "${JOB_ALERT_MAX_AGE_HOURS}" || sla_ok=0
     [ "${JOB_ENABLED}" = "1" ] && [ "${sla_ok}" -eq 0 ] && verdict="stale"
-    case "${st}" in failed|degraded) verdict="failed" ;; esac
+    case "${st}" in failed | degraded) verdict="failed" ;; esac
 
     body+="{"
     body+="$(json_kv name "${job}"),"
@@ -202,11 +216,26 @@ cmd_logs() {
   local job="" follow=0 lines=200
   while [ $# -gt 0 ]; do
     case "$1" in
-      -f|--follow) follow=1; shift ;;
-      --lines) lines="$2"; shift 2 ;;
-      --lines=*) lines="${1#*=}"; shift ;;
-      -*) err "Unknown flag for logs: $1"; exit "${EX_USAGE}" ;;
-      *) job="$1"; shift ;;
+      -f | --follow)
+        follow=1
+        shift
+        ;;
+      --lines)
+        lines="$2"
+        shift 2
+        ;;
+      --lines=*)
+        lines="${1#*=}"
+        shift
+        ;;
+      -*)
+        err "Unknown flag for logs: $1"
+        exit "${EX_USAGE}"
+        ;;
+      *)
+        job="$1"
+        shift
+        ;;
     esac
   done
   config_load

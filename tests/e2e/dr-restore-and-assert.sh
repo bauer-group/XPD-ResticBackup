@@ -20,21 +20,30 @@ export DEBIAN_FRONTEND=noninteractive
 
 PASS=0
 FAIL=0
-ok()   { printf '  \033[32mPASS\033[0m %s\n' "$*"; PASS=$(( PASS + 1 )); }
-bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAIL=$(( FAIL + 1 )); }
-ck()   { [ "$1" -eq 0 ] && ok "$2" || bad "$2"; }
+ok() {
+  printf '  \033[32mPASS\033[0m %s\n' "$*"
+  PASS=$((PASS + 1))
+}
+bad() {
+  printf '  \033[31mFAIL\033[0m %s\n' "$*"
+  FAIL=$((FAIL + 1))
+}
+ck() { [ "$1" -eq 0 ] && ok "$2" || bad "$2"; }
 sect() { printf '\n\033[1m%s\033[0m\n' "$*"; }
-log()  { printf '\033[32m[phoenix]\033[0m %s\n' "$*"; }
+log() { printf '\033[32m[phoenix]\033[0m %s\n' "$*"; }
 
-[ -r "${EV}/before.json" ] || { echo "no evidence from the seed phase" >&2; exit 1; }
+[ -r "${EV}/before.json" ] || {
+  echo "no evidence from the seed phase" >&2
+  exit 1
+}
 BEFORE="$(cat "${EV}/before.json")"
 jq -r . <<<"${BEFORE}" >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq jq >/dev/null; }
 
-WANT_RUN="$(jq -r '.run'            <<<"${BEFORE}")"
+WANT_RUN="$(jq -r '.run' <<<"${BEFORE}")"
 WANT_PG_FP="$(jq -r '.pg_fingerprint' <<<"${BEFORE}")"
-WANT_PG_ROWS="$(jq -r '.pg_rows'      <<<"${BEFORE}")"
+WANT_PG_ROWS="$(jq -r '.pg_rows' <<<"${BEFORE}")"
 WANT_MY_FP="$(jq -r '.my_fingerprint' <<<"${BEFORE}")"
-WANT_MY_ROWS="$(jq -r '.my_rows'      <<<"${BEFORE}")"
+WANT_MY_ROWS="$(jq -r '.my_rows' <<<"${BEFORE}")"
 
 # -----------------------------------------------------------------------------
 sect "1. Recovery with only what the sheet lists"
@@ -64,7 +73,8 @@ BOOT_RC=$?
 # BOOT_RC was collected and only reported in the closing JSON, so a bootstrap
 # that died on its first line produced eleven downstream FAILs and no statement
 # about the actual cause. Assert it where it happens.
-[ "${BOOT_RC}" -eq 0 ]; ck $? "dr bootstrap exits 0"
+[ "${BOOT_RC}" -eq 0 ]
+ck $? "dr bootstrap exits 0"
 [ "${BOOT_RC}" -eq 0 ] || sed 's/^/      /' /tmp/bootstrap.log | head -10
 
 bg-backup snapshots >/tmp/snapshots.log 2>&1
@@ -77,13 +87,16 @@ sect "2. Restore BY RUN"
 # resolving each independently pairs Monday's database with Tuesday's files.
 bg-backup restore dir --path /srv --run "${WANT_RUN}" --to /tmp/restore >/tmp/restore.log 2>&1
 RESTORE_RC=$?
-[ "${RESTORE_RC}" -eq 0 ]; ck $? "restore --run ${WANT_RUN} exits 0"
+[ "${RESTORE_RC}" -eq 0 ]
+ck $? "restore --run ${WANT_RUN} exits 0"
 [ "${RESTORE_RC}" -eq 0 ] || sed 's/^/      /' /tmp/restore.log | head -10
 
 R="$(find /tmp/restore -type d -name data -path '*/srv/*' 2>/dev/null | head -n1)"
-[ -n "${R}" ]; ck $? "the restored /srv/data was found"
+[ -n "${R}" ]
+ck $? "the restored /srv/data was found"
 DUMPS="$(find /tmp/restore -type d -name dumps -path '*/srv/*' 2>/dev/null | head -n1)"
-[ -n "${DUMPS}" ]; ck $? "the restored dumps were found"
+[ -n "${DUMPS}" ]
+ck $? "the restored dumps were found"
 # Without a placeholder an empty DUMPS turns "${DUMPS}/my-all.sql" into the
 # absolute path /my-all.sql, and the harness then reports a confusing
 # "No such file or directory" for a file it never meant to name.
@@ -101,13 +114,14 @@ ck $? "the post-snapshot file is ABSENT from the restore"
 # -----------------------------------------------------------------------------
 sect "4. Content and metadata"
 
-( cd "${R}" && find . -type f -exec sha256sum {} + | sort -k2 ) >/tmp/after-files.sha256
+(cd "${R}" && find . -type f -exec sha256sum {} + | sort -k2) >/tmp/after-files.sha256
 grep -v '^.*  ./dumps' "${EV}/files.sha256" | grep -E '  \./' | sort -k2 >/tmp/before-files.sha256 || true
 diff <(grep -E '  \./(size|sub|symlink|hardlink|Gr|sparse)' /tmp/before-files.sha256 | sort -k2) \
-     <(grep -E '  \./(size|sub|symlink|hardlink|Gr|sparse)' /tmp/after-files.sha256  | sort -k2) >/dev/null 2>&1
+  <(grep -E '  \./(size|sub|symlink|hardlink|Gr|sparse)' /tmp/after-files.sha256 | sort -k2) >/dev/null 2>&1
 ck $? "file content hashes match"
 
-[ -L "${R}/symlink.bin" ]; ck $? "symlink restored as a symlink"
+[ -L "${R}/symlink.bin" ]
+ck $? "symlink restored as a symlink"
 
 # Hardlinks: restic preserves the link, so both names must share one inode.
 A_INO="$(stat -c %i "${R}/hardlink-a.bin" 2>/dev/null)"
@@ -115,13 +129,16 @@ B_INO="$(stat -c %i "${R}/hardlink-b.bin" 2>/dev/null)"
 [ -n "${A_INO}" ] && [ "${A_INO}" = "${B_INO}" ]
 ck $? "hardlink pair shares an inode"
 
-[ -f "${R}/size-0.bin" ] && [ ! -s "${R}/size-0.bin" ]; ck $? "zero-byte file stayed zero bytes"
+[ -f "${R}/size-0.bin" ] && [ ! -s "${R}/size-0.bin" ]
+ck $? "zero-byte file stayed zero bytes"
 # A glob rather than `ls | grep`: the filename under test is deliberately
 # non-ASCII, which is exactly the case where parsing ls output goes wrong.
-compgen -G "${R}/Gr*" >/dev/null; ck $? "UTF-8 filename preserved"
+compgen -G "${R}/Gr*" >/dev/null
+ck $? "UTF-8 filename preserved"
 
 M="$(stat -c '%a %u' "${R}/sub/restricted.txt" 2>/dev/null)"
-[ "${M}" = "600 4242" ]; ck $? "restrictive mode and non-root owner preserved (got '${M}')"
+[ "${M}" = "600 4242" ]
+ck $? "restrictive mode and non-root owner preserved (got '${M}')"
 
 # Sparseness: the restored file must not have become 1 GiB of real blocks.
 #
@@ -132,7 +149,7 @@ M="$(stat -c '%a %u' "${R}/sub/restricted.txt" 2>/dev/null)"
 APPARENT="$(stat -c %s "${R}/sparse.bin" 2>/dev/null || echo 0)"
 _BLOCKS="$(stat -c %b "${R}/sparse.bin" 2>/dev/null || echo 0)"
 _BSIZE="$(stat -c %B "${R}/sparse.bin" 2>/dev/null || echo 0)"
-ACTUAL="$(( ${_BLOCKS:-0} * ${_BSIZE:-0} ))"
+ACTUAL="$((${_BLOCKS:-0} * ${_BSIZE:-0}))"
 [ "${APPARENT:-0}" -gt "${ACTUAL}" ]
 ck $? "sparse file stayed sparse (apparent ${APPARENT:-0}, actual ${ACTUAL})"
 
