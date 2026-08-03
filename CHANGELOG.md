@@ -1,3 +1,9 @@
+## [0.2.0](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.1.3...v0.2.0) (2026-08-03)
+
+### 🚀 Features
+
+* **db:** supported and proved all eight database engines ([e347097](https://github.com/bauer-group/XPD-ResticBackup/commit/e3470976aa22a2867426995d507c39d695c1a59e))
+
 ## [0.1.3](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.1.2...v0.1.3) (2026-08-03)
 
 ### 🐛 Bug Fixes
