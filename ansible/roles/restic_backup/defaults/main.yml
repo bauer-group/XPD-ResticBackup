@@ -96,8 +96,8 @@ restic_backup_restic_min_version: "0.17.0"
 # =============================================================================
 # THE PREFIX IS THE INVENTORY HOSTNAME, VERBATIM.
 #
-# Part of this fleet predates the AAAA-GG naming convention (25000-040.cloud.
-# bauer-group.com is a real host). Deriving an asset id, a group code or any
+# Part of this fleet predates the AAAA-GG naming convention - hosts named like
+# 10000-001.cloud.example.com exist. Deriving an asset id, a group code or any
 # other structure from the hostname would work for most hosts and silently
 # produce a wrong repository path for the rest — which means writing into
 # another host's prefix, or creating an orphan one nobody monitors.

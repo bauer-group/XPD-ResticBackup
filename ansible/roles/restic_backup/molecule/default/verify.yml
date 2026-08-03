@@ -201,7 +201,7 @@
 
     - name: The repository prefix is the legacy FQDN, verbatim
       ansible.builtin.assert:
-        that: "'25000-040.cloud.bauer-group.com' in (main_conf.content | b64decode)"
+        that: "'10000-001.cloud.example.com' in (main_conf.content | b64decode)"
         fail_msg: >-
           the legacy hostname was not carried through verbatim - the role must
           never derive or normalise it (docs/ansible.md)

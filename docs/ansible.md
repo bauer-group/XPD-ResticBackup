@@ -104,7 +104,7 @@ that gets backed up. Different axis entirely.
 ### Legacy hostnames
 
 Some hosts use an older naming scheme that does not match `AAAA-GG` (for example
-`25000-040.cloud.bauer-group.com`). `parse_asset_hostname` returns
+`10000-001.cloud.example.com`). `parse_asset_hostname` returns
 `valid: false` for those.
 
 **Never derive an asset id or group code from the hostname, and never assert the

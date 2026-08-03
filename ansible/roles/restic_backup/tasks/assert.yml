@@ -34,7 +34,7 @@
 # --- Repository identity ----------------------------------------------------
 # NOTE: there is deliberately NO assertion on the SHAPE of the hostname.
 # Part of this fleet uses a legacy naming scheme (e.g.
-# 25000-040.cloud.bauer-group.com) that does not match the AAAA-GG convention.
+# 10000-001.cloud.example.com) that does not match the AAAA-GG convention.
 # Any regex here would reject exactly those hosts, and "fixing" it by deriving
 # a prefix from parsed hostname parts would write one host's snapshots into
 # another host's repository. inventory_hostname is used verbatim, full stop.

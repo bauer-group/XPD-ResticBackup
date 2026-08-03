@@ -23,10 +23,10 @@
     # A legacy-style hostname on purpose: the role must never derive an asset id
     # or a group code from it, and must never assert the AAAA-GG schema.
     # See docs/ansible.md.
-    restic_backup_repo_prefix: "25000-040.cloud.bauer-group.com"
+    restic_backup_repo_prefix: "10000-001.cloud.example.com"
 
     restic_backup_repository: >-
-      s3:https://minio.example.invalid/backup-server/25000-040.cloud.bauer-group.com
+      s3:https://minio.example.invalid/backup-server/10000-001.cloud.example.com
     restic_backup_password: "molecule-throwaway-passphrase-do-not-use"
     restic_backup_s3_access_key_id: "molecule-throwaway-key"
     restic_backup_s3_secret_access_key: "molecule-throwaway-secret"

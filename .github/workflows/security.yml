@@ -103,21 +103,18 @@ jobs:
     # job fails for a reason that has nothing to do with the code. Run it where
     # the token can actually write.
     #
-    # AND only on a PUBLIC repository. Code scanning needs GitHub Advanced
-    # Security on a private repo, and this one has it disabled
-    # (security_and_analysis.code_security.status = disabled), so the analyse
-    # step fails with
+    # This job needs code scanning to be available. On a private repository that
+    # means GitHub Advanced Security, and it was switched off here, so every run
+    # failed with
     #     Code Security must be enabled for this repository to use code scanning
-    # every single run - a permanently red job that says nothing about the code.
+    # It is now enabled (security_and_analysis.code_security.status = enabled),
+    # which is why there is no visibility gate: the analysis runs on the private
+    # repository and nothing has to be published for it.
     #
-    # This is a gate, not a removal: the whole point of the project is a repo the
-    # installer can be curl-piped from, so it becomes public, and on a public
-    # repository code scanning is free and this job starts running by itself.
-    # Until then the workflow risk surface is covered by actionlint in the
-    # release gate, which is what CodeQL's `actions` pack largely duplicates.
-    if: >-
-      github.event_name != 'pull_request' &&
-      github.event.repository.visibility == 'public'
+    # If code scanning is ever disabled again this job goes red rather than
+    # silently skipping - which is correct. A security gate that quietly turns
+    # itself off is worse than one that is loudly unavailable.
+    if: github.event_name != 'pull_request'
     uses: bauer-group/automation-templates/.github/workflows/modules-codeql.yml@main
     permissions:
       contents: read
