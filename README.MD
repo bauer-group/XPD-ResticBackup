@@ -1,17 +1,6 @@
 <!-- AUTO-GENERATED FILE. DO NOT EDIT. Edit docs/README.template.MD instead. -->
-<!-- Generated on 2026-08-03 10:03:46 UTC -->
+<!-- Generated on 2026-08-03 10:18:11 UTC -->
 
-<!--
-  THIS FILE IS THE SOURCE. README.md is generated from it by
-  .github/workflows/documentation.yml (bauer-group/automation-templates), so an
-  edit to README.md is overwritten on the next push - edit this file instead.
-
-  It exists because the documentation workflow hardcodes this path and had no
-  input to change it: with the file absent every run failed with
-      Template file not found: docs/README.template.MD
-  while README.md was maintained by hand. The scaffolding was inherited from
-  another repository and never wired up here.
--->
 # bg-backup
 
 [![Release](https://img.shields.io/github/v/release/bauer-group/XPD-ResticBackup?sort=semver)](https://github.com/bauer-group/XPD-ResticBackup/releases)
