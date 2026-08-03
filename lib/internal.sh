@@ -132,26 +132,28 @@ internal_command_from_unit() {
 # -----------------------------------------------------------------------------
 # unquiesce
 # -----------------------------------------------------------------------------
-# The journal is a line-oriented file written by lib/quiesce.sh as the quiesce
-# proceeds - each line appended BEFORE the corresponding action is taken, so a
-# process killed between the write and the action still leaves a record to
-# replay (replaying an action that never happened is a no-op here; failing to
-# replay one that did is an outage).
+# The journal is written by lib/quiesce.sh BEFORE the corresponding action is
+# taken, so a process killed between the write and the action still leaves a
+# record to replay. Replaying an action that never happened is a no-op here;
+# failing to replay one that did is an outage.
 #
-# Format, one record per line, fields separated by a TAB:
+# Format, one key=value per line, exactly as quiesce.sh writes it:
 #
-#     docker-unpause <TAB> <container>
-#     docker-start   <TAB> <container>
-#     systemd-start  <TAB> <unit>
-#     fsfreeze-thaw  <TAB> <mountpoint>
-#     umount         <TAB> <mountpoint>
-#     lvremove       <TAB> <vg/lv>
+#     mode=docker-pause|service-stop|lvm|btrfs|zfs
+#     job=<name>
+#     started=<epoch>
+#     ids=<container id> ...        (docker-pause)
+#     units=<unit> ...              (service-stop)
+#     snapshot=<dev>                (lvm/btrfs/zfs)
+#     mountpoint=<path>             (lvm/btrfs/zfs)
 #
-# Lines starting with '#' are metadata for humans and are ignored.
-#
-# lib/quiesce.sh owns the format. If it exposes quiesce_replay_state(), that is
-# used instead of the parser below - one implementation of the semantics beats
-# two that agree today.
+# THIS COMMENT USED TO DESCRIBE A TAB-SEPARATED VERB FORMAT, and so did the
+# parser below it - a format quiesce.sh has never written. `internal unquiesce`
+# therefore understood no record, reported failure, and left the containers
+# paused after the SIGKILL it exists to clean up after. Both the parser and this
+# description are now gone: quiesce_reverse_file() in lib/quiesce.sh is the
+# single reader, shared with the normal end-of-run path, so the two cannot
+# disagree about the file again.
 internal_quiesce_state_file() {
   local job="$1"
   if declare -F quiesce_state_file >/dev/null 2>&1; then
@@ -205,11 +207,17 @@ internal_unquiesce() {
 
   log "Replaying quiesce journal ${f} (the job's own cleanup did not run)"
 
-  if declare -F quiesce_replay_state >/dev/null 2>&1; then
-    quiesce_replay_state "${f}" || rc=$?
-  else
-    internal_replay_records "${f}" || rc=$?
-  fi
+  # THE SAME reverser the normal end-of-run path uses. This used to dispatch to
+  # internal_replay_records(), a second parser for a TAB-separated verb/argument
+  # format that quiesce.sh has never written - so after a SIGKILL the journal
+  # was read, understood by nobody, and the containers stayed paused. A safety
+  # net with its own idea of the file format is not a safety net.
+  #
+  # quiesce.sh is sourced here rather than by the dispatcher because this path
+  # must keep working with a broken /etc/bg-backup, and lib_source needs no
+  # configuration.
+  lib_source quiesce.sh
+  quiesce_reverse_file "${f}" || rc=$?
 
   if [ "${rc}" -eq 0 ]; then
     rm -f "${f}"
@@ -226,207 +234,15 @@ internal_unquiesce() {
   return "${EX_FAIL}"
 }
 
-# internal_replay_records <file>
-# Records are replayed in REVERSE order, mirroring core.sh's cleanup registry:
-# teardown has to undo setup backwards, or a snapshot gets removed before it is
-# unmounted and a container is started before the volume it needs is back.
-internal_replay_records() {
-  local file="$1"
-  local -a lines=()
-  local i line verb arg rc=0
-
-  mapfile -t lines <"${file}"
-
-  for ((i = ${#lines[@]} - 1; i >= 0; i--)); do
-    line="${lines[i]}"
-    case "${line}" in '' | '#'*) continue ;; esac
-
-    verb="${line%%$'\t'*}"
-    arg="${line#*$'\t'}"
-    [ "${arg}" = "${line}" ] && arg=""
-
-    case "${verb}" in
-      docker-unpause) _internal_docker_unpause "${arg}" || rc="${EX_FAIL}" ;;
-      docker-start) _internal_docker_start "${arg}" || rc="${EX_FAIL}" ;;
-      systemd-start) _internal_systemd_start "${arg}" || rc="${EX_FAIL}" ;;
-      fsfreeze-thaw) _internal_fsfreeze_thaw "${arg}" || rc="${EX_FAIL}" ;;
-      umount) _internal_umount "${arg}" || rc="${EX_FAIL}" ;;
-      lvremove) _internal_lvremove "${arg}" || rc="${EX_FAIL}" ;;
-      *)
-        # A record we do not understand means this build and the writer of the
-        # journal disagree. That is a bug, and it is reported as a failure
-        # rather than shrugged off: the whole purpose of this path is that
-        # nothing stays paused or stopped, and "I skipped a line I could not
-        # read" is indistinguishable from "the stack is still down".
-        err "Unknown quiesce record '${verb}' - cannot undo it automatically"
-        rc="${EX_FAIL}"
-        ;;
-    esac
-  done
-  return "${rc}"
-}
-
-# Each helper follows the same shape: attempt the action, and if it fails, ask
-# whether the desired STATE already holds. "docker unpause" on a container that
-# is already running exits non-zero, and treating that as a failure would turn
-# every ordinary run into an alert.
-_internal_docker_unpause() {
-  local c="$1" paused
-  [ -n "${c}" ] || return 0
-  have docker || {
-    err "docker is not installed - cannot unpause ${c}"
-    return 1
-  }
-
-  if docker unpause "${c}" >/dev/null 2>&1; then
-    log "unpaused container ${c}"
-    return 0
-  fi
-  paused="$(docker inspect -f '{{.State.Paused}}' "${c}" 2>/dev/null || echo unknown)"
-  case "${paused}" in
-    false)
-      debug "container ${c} was not paused"
-      return 0
-      ;;
-    unknown)
-      warn "container ${c} no longer exists - nothing to unpause"
-      return 0
-      ;;
-    *)
-      err "container ${c} is still paused"
-      return 1
-      ;;
-  esac
-}
-
-_internal_docker_start() {
-  local c="$1" running
-  [ -n "${c}" ] || return 0
-  have docker || {
-    err "docker is not installed - cannot start ${c}"
-    return 1
-  }
-
-  if docker start "${c}" >/dev/null 2>&1; then
-    log "started container ${c}"
-    return 0
-  fi
-  running="$(docker inspect -f '{{.State.Running}}' "${c}" 2>/dev/null || echo unknown)"
-  case "${running}" in
-    true)
-      debug "container ${c} was already running"
-      return 0
-      ;;
-    unknown)
-      err "container ${c} no longer exists and could not be started"
-      return 1
-      ;;
-    *)
-      err "container ${c} is still stopped"
-      return 1
-      ;;
-  esac
-}
-
-_internal_systemd_start() {
-  local unit="$1"
-  [ -n "${unit}" ] || return 0
-  have systemctl || {
-    err "systemctl is not available - cannot start ${unit}"
-    return 1
-  }
-
-  # No --no-block: we want to know whether it actually came up. This runs inside
-  # ExecStopPost=, which is bounded by TimeoutStopSec= in the unit.
-  if systemctl start "${unit}" >/dev/null 2>&1; then
-    log "started unit ${unit}"
-    return 0
-  fi
-  if systemctl is-active --quiet "${unit}" 2>/dev/null; then
-    debug "unit ${unit} was already active"
-    return 0
-  fi
-  err "unit ${unit} is still not active"
-  return 1
-}
-
-_internal_fsfreeze_thaw() {
-  local mp="$1"
-  [ -n "${mp}" ] || return 0
-  have fsfreeze || {
-    warn "fsfreeze not installed - cannot thaw ${mp}"
-    return 0
-  }
-  # An already-thawed filesystem returns EINVAL. That is the state we want, so
-  # it is not an error - but a filesystem that is genuinely still frozen blocks
-  # every write on the host, so anything else is fatal.
-  if fsfreeze -u "${mp}" >/dev/null 2>&1; then
-    log "thawed ${mp}"
-    return 0
-  fi
-  debug "fsfreeze -u ${mp} failed - assuming it was not frozen"
-  return 0
-}
-
-_internal_umount() {
-  local mp="$1"
-  [ -n "${mp}" ] || return 0
-  mountpoint -q "${mp}" 2>/dev/null || {
-    debug "${mp} is not mounted"
-    return 0
-  }
-
-  if umount "${mp}" >/dev/null 2>&1; then
-    log "unmounted ${mp}"
-    return 0
-  fi
-  # A lazy unmount as a last resort. The mount is OURS (a snapshot staged for
-  # this backup), the reader is a restic process that is already dead or dying,
-  # and leaving it mounted keeps the snapshot volume pinned so the next run
-  # cannot create one.
-  warn "${mp} is busy - detaching lazily"
-  if umount -l "${mp}" >/dev/null 2>&1; then
-    return 0
-  fi
-  err "could not unmount ${mp}"
-  return 1
-}
-
-_internal_lvremove() {
-  local lv="$1" attr
-  [ -n "${lv}" ] || return 0
-  have lvremove || {
-    err "lvm2 is not installed - cannot remove ${lv}"
-    return 1
-  }
-
-  # SAFETY RAIL, and it is not optional. This function deletes a logical volume
-  # on the say-so of a file in /run. A corrupted or hand-edited journal must not
-  # be able to take out a production LV, so the volume is removed ONLY if LVM
-  # itself reports it as a snapshot ('s' in the first attribute position). That
-  # test is independent of any naming convention, which means it cannot be
-  # defeated by a rename or drift in how quiesce.sh names its volumes.
-  attr="$(lvs --noheadings -o lv_attr "${lv}" 2>/dev/null | tr -d ' ' || true)"
-  if [ -z "${attr}" ]; then
-    debug "logical volume ${lv} does not exist - nothing to remove"
-    return 0
-  fi
-  case "${attr}" in
-    s* | S*) : ;;
-    *)
-      err "REFUSING to remove ${lv}: LVM reports attributes '${attr}', which is not a snapshot"
-      err "Remove it by hand if it really is backup scratch: lvremove ${lv}"
-      return 1
-      ;;
-  esac
-
-  if lvremove -f "${lv}" >/dev/null 2>&1; then
-    log "removed snapshot volume ${lv}"
-    return 0
-  fi
-  err "could not remove snapshot volume ${lv}"
-  return 1
-}
+# NOTE ON WHAT USED TO BE HERE. internal_replay_records() and its
+# _internal_docker_unpause / _internal_docker_start / _internal_systemd_start /
+# _internal_fsfreeze_thaw / _internal_umount / _internal_lvremove helpers lived
+# at this point and parsed a TAB-separated verb/argument journal. quiesce.sh has
+# never written that format - it writes key=value - so the ExecStopPost safety
+# net recognised nothing, reported failure, and left containers paused after a
+# SIGKILL. They are deleted rather than fixed: a second implementation of a file
+# format is how the two drift apart again. `internal unquiesce` now calls
+# quiesce_reverse_file(), the same function the normal end-of-run path uses.
 
 # -----------------------------------------------------------------------------
 # notify-failure

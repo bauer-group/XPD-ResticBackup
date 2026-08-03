@@ -337,15 +337,27 @@ docker_backup_run() {
   fi
 
   # The quiesce window covers only the file read, not the dumps above.
-  local -a filter=()
+  #
+  # Resolve container IDS here, one `docker ps` per project. Passing several
+  # `--filter label=com.docker.compose.project=<p>` to a single `docker ps` does
+  # NOT mean "any of these": Docker ANDs label filters, and no container carries
+  # two values for one label key, so two or more projects matched nothing at all
+  # and nothing was ever paused. See _quiesce_docker_pause() for the measurement.
+  local -a targets=()
   if [ "${JOB_QUIESCE_SCOPE}" = "host" ]; then
-    filter=()
+    mapfile -t targets < <(docker ps -q 2>/dev/null || true)
   else
-    for project in "${projects[@]}"; do
-      [ -n "${project}" ] && filter+=(--filter "label=com.docker.compose.project=${project}")
+    local _p
+    for _p in "${projects[@]}"; do
+      [ -n "${_p}" ] || continue
+      mapfile -t -O "${#targets[@]}" targets \
+        < <(docker ps -q --filter "label=com.docker.compose.project=${_p}" 2>/dev/null || true)
     done
   fi
-  quiesce_begin "${job}" "${filter[@]:-}"
+
+  # ${a[@]+"${a[@]}"}, not "${a[@]:-}": the latter expands an EMPTY array to one
+  # empty-string argument rather than to nothing.
+  quiesce_begin "${job}" ${targets[@]+"${targets[@]}"}
 
   local -a args=(backup --host "${BGB_HOSTNAME}" --json)
   mapfile -t -O "${#args[@]}" args < <(restic_tag_args "${job}" "${run_id}" "${JOB_TAGS[@]:-}" "${extra_tags[@]:-}")

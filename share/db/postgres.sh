@@ -461,7 +461,12 @@ _db_postgres_counts_json() {
 # feeding plain SQL to pg_restore produces "input file does not appear to be a
 # valid archive" - both after the operator has already dropped the old database.
 db_postgres_restore() {
-  local c="${1:-}" src="${2:--}" target="${3:-postgres}"
+  # NO DEFAULT TARGET. It used to be `postgres`, and no caller ever passed one,
+  # so every per-database custom-format dump was restored into the postgres
+  # MAINTENANCE database: the application database stayed empty, the maintenance
+  # database filled up with someone else's schema, and pg_restore reported
+  # success. A wrong destination is worse than a refusal, so this refuses.
+  local c="${1:-}" src="${2:--}" target="${3:-}"
   [ -n "${c}" ] || die "${EX_USAGE}" "db_postgres_restore: container is required"
   require_cmd docker
 
@@ -482,6 +487,9 @@ db_postgres_restore() {
   local script rc=0
   case "${fmt}" in
     custom)
+      # A custom-format dump is ONE database and carries no target in itself.
+      [ -n "${target}" ] || die "${EX_USAGE}" \
+        "postgres: a custom-format dump needs its destination database - pass it as the third argument (restore db derives it from the dump's file name)"
       log "postgres: pg_restore into ${c}:${target}"
       # --exit-on-error is the difference between a restore that failed and a
       # restore you believe worked: without it pg_restore prints errors, skips

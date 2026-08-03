@@ -75,11 +75,16 @@ _db_es_curl() {
       [ -n "${OPENSEARCH_INITIAL_ADMIN_PASSWORD:-}" ] && user="admin"
       auth="-u $user:$pw"
     fi
+    # $1/$2/$3, NOT $2/$3/$4. `sh -c "$script" _ a b c` makes `_` the shell NAME
+    # ($0) and a/b/c the positional parameters $1/$2/$3. Reading them one place
+    # to the right sent the PATH as the HTTP method and the BODY as the path, so
+    # every Elasticsearch/OpenSearch call this module made was malformed - and
+    # the invocation discards stderr, so the snapshot API simply never answered.
     # shellcheck disable=SC2086
-    if [ -n "$4" ]; then
-      curl -sS -k $auth -X "$2" -H "Content-Type: application/json" -d "$4" "$scheme://localhost:9200$3"
+    if [ -n "$3" ]; then
+      curl -sS -k $auth -X "$1" -H "Content-Type: application/json" -d "$3" "$scheme://localhost:9200$2"
     else
-      curl -sS -k $auth -X "$2" "$scheme://localhost:9200$3"
+      curl -sS -k $auth -X "$1" "$scheme://localhost:9200$2"
     fi
   '
   docker exec -i "${c}" sh -c "${script}" _ "${method}" "${path}" "${body}" 2>/dev/null

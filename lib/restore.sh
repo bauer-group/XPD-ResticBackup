@@ -145,6 +145,31 @@ restore_resolve_snapshot() {
   printf '%s' "${json}" | jq -r "${filter}"
 }
 
+# restore_preview_report <headline> [detail-line...]
+#
+# WHY THIS EXISTS. `restore preview` set BGB_RESTORE_PREVIEW=1 and re-dispatched,
+# but only restore_path_cmd ever read the flag. `restore preview volume`,
+# `preview project`, `preview db` and `preview system` therefore performed the
+# REAL operation - a volume swap, a `compose up --force-recreate`, a dump loaded
+# into a live database. An operator typing "preview" to see what would happen
+# got the thing itself, which is the worst possible direction for a flag named
+# preview to fail in.
+#
+# Every subcommand now reports through here BEFORE its first write, so a preview
+# that reaches new code paths is inert by construction rather than by review.
+restore_preview_report() {
+  local headline="$1"
+  shift || true
+  log "PREVIEW - nothing will be written"
+  log "  ${headline}"
+  local line
+  for line in "$@"; do
+    [ -n "${line}" ] && log "  ${line}"
+  done
+  log "Re-run without 'preview' to perform it."
+  return 0
+}
+
 restore_new_token() {
   printf '%s-%s' "$(date -u '+%Y%m%dT%H%M%SZ')" "$$"
 }
@@ -613,6 +638,20 @@ restore_volume_cmd() {
 
   local mp
   mp="$(docker volume inspect "${R_NAME}" 2>/dev/null | jq -r '.[0].Mountpoint // empty')"
+
+  # Before `docker volume create`, which is already a write.
+  if [ "${BGB_RESTORE_PREVIEW:-0}" = "1" ]; then
+    local psnap
+    psnap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" files "${R_SOURCE_HOST}")"
+    restore_preview_report \
+      "restore volume --name ${R_NAME}" \
+      "snapshot:   ${psnap:-<none matched>}" \
+      "mountpoint: ${mp:-<the volume does not exist and would be created>}" \
+      "in use by:  $(docker ps --filter "volume=${R_NAME}" --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')" \
+      "would replace the contents of ${mp:-<new volume>}, keeping the old copy as .bgbk-old-<token>"
+    return 0
+  fi
+
   if [ -z "${mp}" ]; then
     log "Volume '${R_NAME}' does not exist - creating it"
     docker volume create "${R_NAME}" >/dev/null
@@ -665,6 +704,23 @@ restore_project_cmd() {
   repo_env_load
   restic_require
   lib_source dr.sh
+
+  if [ "${BGB_RESTORE_PREVIEW:-0}" = "1" ]; then
+    local mf="${BGB_FACTS_DIR:-/var/lib/bg-backup/facts}/docker-manifest.json"
+    local wd="" vols=""
+    if [ -r "${mf}" ] && have jq; then
+      wd="$(jq -r --arg p "${R_NAME}" '.projects[] | select(.name==$p) | .containers[0].working_dir // ""' "${mf}")"
+      vols="$(jq -r --arg p "${R_NAME}" '[.projects[] | select(.name==$p) | .containers[]?.mounts[]? | select(.type=="volume") | .name] | unique | join(" ")' "${mf}")"
+    fi
+    restore_preview_report \
+      "restore project --name ${R_NAME}" \
+      "working dir: ${wd:-<not in the manifest>}" \
+      "volumes:     ${vols:-<none recorded>}" \
+      "would overwrite the compose files, the .env and every volume above" \
+      "$([ "${R_RECREATE}" = "1" ] && echo 'and then run: docker compose up -d --force-recreate')"
+    return 0
+  fi
+
   dr_restore_project "${R_NAME}" "${R_RUN}" "${R_CONFIG_ONLY}" "${R_RECREATE}"
 }
 
@@ -684,6 +740,24 @@ restore_db_cmd() {
   local snap
   snap="$(restore_resolve_snapshot "${R_RUN}" "${R_AT}" "${R_SNAPSHOT}" "${R_JOB}" dbdump "${R_SOURCE_HOST}" "/${path}")"
   [ -n "${snap}" ] || die "${EX_PRECOND}" "No database dump snapshot contains /${path}"
+
+  # --into <container> loads the dump into a LIVE database. A preview that did
+  # that would be indistinguishable from the real thing after the fact.
+  if [ "${BGB_RESTORE_PREVIEW:-0}" = "1" ]; then
+    local target
+    case "${R_INTO}" in
+      -) target="stdout" ;;
+      scratch) target="a throwaway scratch container (no live database touched)" ;;
+      *) target="the LIVE container '${R_INTO}' - this would overwrite its data" ;;
+    esac
+    restore_preview_report \
+      "restore db --db ${R_DB}" \
+      "snapshot: ${snap}" \
+      "path:     /${path}" \
+      "target:   ${target}"
+    return 0
+  fi
+
   case "${R_INTO}" in
     -)
       # Straight to stdout: the operator pipes it wherever they want. This is
@@ -704,7 +778,17 @@ restore_db_cmd() {
       declare -F "${fn}" >/dev/null 2>&1 || die "${EX_PRECOND}" "Engine '${engine}' cannot restore"
       warn "This will load the dump into the LIVE container '${container}'."
       confirm "Continue?" || return "${EX_SAFETY}"
-      restic_exec dump "${snap}" "/${path}" | "${fn}" "${container}"
+      # Derive the destination database from the dump's file name and pass it
+      # as the third argument. A PostgreSQL custom-format dump names exactly one
+      # database and carries no destination inside it, so without this the
+      # engine has nothing to go on - it used to default to the `postgres`
+      # maintenance database and restore shopdb.dump into it, successfully and
+      # into the wrong place. Engines that need no target (mysql, mongodb)
+      # accept the extra argument and ignore it.
+      local dbname
+      dbname="$(basename -- "${R_DB}")"
+      dbname="${dbname%.*}"
+      restic_exec dump "${snap}" "/${path}" | "${fn}" "${container}" - "${dbname}"
       ;;
   esac
 }
@@ -713,7 +797,25 @@ restore_system_cmd() {
   restore_parse_common "$@"
   require_root
   config_load
+  # repo_env_load and restic_require were missing here, and only here: every
+  # restic call this path triggers ran with no RESTIC_REPOSITORY and no key, so
+  # `restore system` could not work at all. The other four subcommands load them.
+  repo_env_load
+  restic_require
   lib_source dr.sh
+
+  # `dr plan` IS the preview for a system restore: it reads the meta snapshot and
+  # prints the OS, disk, NIC and safe/staged/never classification without writing
+  # anything. Pointing at it beats a second, thinner implementation that could
+  # drift away from what dr_restore_system actually does.
+  if [ "${BGB_RESTORE_PREVIEW:-0}" = "1" ]; then
+    restore_preview_report \
+      "restore system --profile ${R_PROFILE}" \
+      "A system restore has a dedicated planner that reports far more than this could:" \
+      "    bg-backup dr plan${R_RUN:+ --run ${R_RUN}}"
+    return 0
+  fi
+
   dr_restore_system "${R_PROFILE}" "${R_RUN}"
 }
 

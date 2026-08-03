@@ -232,7 +232,18 @@ db_dump_all() {
     # result protocol (BGB_DB_RESULT and friends) is carried in variables and a
     # subprocess could not set them. The timeout is enforced inside the engine's
     # own restic invocation instead, and JOB_QUIESCE_MAX_SECONDS is the backstop.
-    "${fn}" "${c}" "${job}" "${run_id}" || rc=$?
+    # THE NAME, not the short ID. Every engine embeds whatever it is given into
+    # the dump path (/db/<engine>/<this>/<file>) and into the container= tag,
+    # and dr.sh and verify.sh parse that segment back out as a container NAME.
+    # Handing them the ID produced /db/postgres/d9c310526af8/shopdb.dump, so a
+    # recovery looking for the dump of "shop-db-1" found nothing - and the ID
+    # changes on every `compose up --force-recreate`, so yesterday's path is
+    # meaningless today. `docker exec` accepts a name just as well as an ID, so
+    # the engines need no change.
+    #
+    # Falls back to the ID only if the name could not be resolved, which means
+    # docker inspect failed - better a wrong-shaped path than no dump.
+    "${fn}" "${name:-${c}}" "${job}" "${run_id}" || rc=$?
 
     # An engine that speaks the result protocol wins over the raw exit code: it
     # can distinguish "dumped, but MyISAM tables mean this is not a consistent

@@ -53,7 +53,10 @@ quiesce_recover_stale() {
 # -----------------------------------------------------------------------------
 # Begin
 # -----------------------------------------------------------------------------
-# quiesce_begin <job> [container-filter-args...]
+# quiesce_begin <job> [container-id...]
+#
+# The trailing arguments are resolved container IDs, never `docker ps` flags.
+# With none, docker-pause freezes every running container.
 quiesce_begin() {
   local job="${1:-${BGB_JOB}}"
   shift || true
@@ -93,14 +96,40 @@ quiesce_begin() {
   esac
 }
 
+# _quiesce_docker_pause <job> <state-file> [container-id...]
+#
+# CONTAINER IDS, not `docker ps` filter flags. The caller used to hand its
+# filters straight through to `docker ps -q "$@"`, and that was wrong twice:
+#
+#   * Docker ANDs label filters (MatchKVList), so one
+#     `--filter label=com.docker.compose.project=<p>` per project matched ZERO
+#     containers as soon as there were two projects - no container carries two
+#     values for one label key. Measured against Docker 29.6.2: each filter
+#     alone matches its container, both together match nothing.
+#   * An empty filter array expanded to one EMPTY argument, and `docker ps` is
+#     cli.NoArgs, so it exited 125 with "accepts no arguments" - swallowed by
+#     `2>/dev/null || true`. That is the JOB_QUIESCE_SCOPE=host path.
+#
+# Both produced an empty id list, which took the branch below and silently ran
+# the whole file backup against LIVE containers while the job reported ok.
+# Resolving ids in the caller, one `docker ps` per project, cannot fail that way.
+#
+# No ids at all means "every running container" - the whole-host quiesce that
+# backup.sh asks for.
 _quiesce_docker_pause() {
   local job="$1" f="$2"
   shift 2
-  local -a ids=()
-  mapfile -t ids < <(docker ps -q "$@" 2>/dev/null || true)
+  local -a ids=("$@")
 
   if [ "${#ids[@]}" -eq 0 ]; then
-    debug "No running containers to pause"
+    mapfile -t ids < <(docker ps -q 2>/dev/null || true)
+  fi
+
+  if [ "${#ids[@]}" -eq 0 ]; then
+    # warn, not debug. "Nothing was paused" is the difference between a
+    # crash-consistent backup and a live one, and at debug level nobody ever
+    # sees it - which is exactly how the two bugs above stayed invisible.
+    warn "docker-pause: no running container matched - the file backup is NOT crash-consistent"
     _BGB_QUIESCE_ACTIVE=0
     return 0
   fi
@@ -177,13 +206,20 @@ _quiesce_service_stop() {
 # End
 # -----------------------------------------------------------------------------
 # quiesce_end [job] - idempotent, never fails the caller, safe to call twice.
-quiesce_end() {
-  local job="${1:-${BGB_JOB}}" f
-  f="$(quiesce_state_file "${job}")"
-  [ -f "${f}" ] || {
-    _BGB_QUIESCE_ACTIVE=0
-    return 0
-  }
+# quiesce_reverse_file <state-file> - undo whatever the journal describes.
+#
+# THE ONE READER, and that is the point. `internal unquiesce` - the
+# ExecStopPost safety net that runs after SIGKILL, OOM or RuntimeMaxSec - used
+# to carry its OWN parser for a TAB-separated verb/argument format that nothing
+# in this codebase has ever written. It therefore recognised no record, reported
+# failure, and left the containers paused or the units stopped: the third and
+# last reversal mechanism was dead in exactly the situation it exists for.
+#
+# Two parsers for one file is the defect. There is now one, and both callers -
+# the normal end-of-run path and the post-mortem one - go through it.
+quiesce_reverse_file() {
+  local f="$1"
+  [ -f "${f}" ] || return 0
 
   # Deliberately parsed rather than sourced: this file is read by a recovery
   # path that may run with a different (or no) configuration loaded, and it must
@@ -247,7 +283,18 @@ quiesce_end() {
     [ "${dur}" -ge 0 ] && BGB_RUN_QUIESCE_SECONDS="${dur}"
     log "Quiesce window: ${dur}s"
   fi
+  return 0
+}
 
+quiesce_end() {
+  local job="${1:-${BGB_JOB}}" f
+  f="$(quiesce_state_file "${job}")"
+  [ -f "${f}" ] || {
+    _BGB_QUIESCE_ACTIVE=0
+    return 0
+  }
+
+  quiesce_reverse_file "${f}"
   rm -f "${f}"
   _BGB_QUIESCE_ACTIVE=0
   return 0

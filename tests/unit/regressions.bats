@@ -691,3 +691,165 @@ JSONL
   run restic_explain_rc 143
   [[ "$output" != *"unknown restic exit code"* ]]
 }
+
+# -----------------------------------------------------------------------------
+# BUG 18: every restore subcommand except file/dir ignored `preview`
+# -----------------------------------------------------------------------------
+# `restore preview` set BGB_RESTORE_PREVIEW=1 and re-dispatched, but only
+# restore_path_cmd ever read it. `preview volume` swapped the volume, `preview
+# project` ran `compose up --force-recreate`, and `preview db --into <container>`
+# loaded a dump into a live database. An operator typing "preview" to find out
+# what would happen got the thing itself.
+#
+# Static, because the property is "no subcommand may write while previewing" and
+# a test per subcommand would only ever cover the ones that exist today.
+@test "regression: every restore subcommand honours preview" {
+  local root
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local fn body missing=""
+  for fn in restore_path_cmd restore_volume_cmd restore_project_cmd \
+    restore_db_cmd restore_system_cmd; do
+    body="$(awk -v f="${fn}" 'index($0, f "()") == 1 {p=1} p; p && /^}/ {exit}' "${root}/lib/restore.sh")"
+    [ -n "${body}" ] || {
+      missing="${missing} ${fn}(absent)"
+      continue
+    }
+    printf '%s' "${body}" | grep -q 'BGB_RESTORE_PREVIEW' || missing="${missing} ${fn}"
+  done
+  [ -z "${missing}" ] || {
+    echo "restore subcommands that would WRITE during a preview:${missing}"
+    false
+  }
+}
+
+@test "regression: restore system loads the repository environment" {
+  # It was the only subcommand calling neither repo_env_load nor restic_require,
+  # so every restic call it triggered ran with no RESTIC_REPOSITORY and no key.
+  local root
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "restore_system_cmd()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/restore.sh")"
+  printf '%s' "${body}" | grep -q 'repo_env_load'
+  printf '%s' "${body}" | grep -q 'restic_require'
+}
+
+# -----------------------------------------------------------------------------
+# BUG 19: docker label filters are ANDed, so multi-project quiesce paused nothing
+# -----------------------------------------------------------------------------
+# lib/docker.sh built one `--filter label=com.docker.compose.project=<p>` per
+# project and passed them all to a single `docker ps`. Docker ANDs label filters
+# and no container carries two values for one key, so with two projects the match
+# was EMPTY, _quiesce_docker_pause took its "nothing to pause" branch at debug
+# level, and the whole file backup ran against live containers - reported ok.
+@test "regression: the docker quiesce passes resolved ids, not filter flags" {
+  local root
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  run grep -c 'quiesce_begin' "${root}/lib/docker.sh"
+  [ "$status" -eq 0 ]
+  # No --filter may reach quiesce_begin any more.
+  ! grep -E 'quiesce_begin[^#]*--filter' "${root}/lib/docker.sh"
+  # And an empty list must expand to NOTHING, not to one empty argument.
+  ! grep -E 'quiesce_begin[^#]*\[@\]:-' "${root}/lib/docker.sh"
+}
+
+@test "regression: an empty array must not expand to one empty argument" {
+  # The shape that broke JOB_QUIESCE_SCOPE=host: `docker ps` is cli.NoArgs, so
+  # the stray "" made it exit 125 - swallowed, leaving an empty id list.
+  run bash -c 'a=(); set -- "${a[@]:-}"; echo $#'
+  [ "$output" = "1" ]
+  run bash -c 'a=(); set -- ${a[@]+"${a[@]}"}; echo $#'
+  [ "$output" = "0" ]
+}
+
+@test "regression: docker-pause reports an empty match instead of hiding it" {
+  local root
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "_quiesce_docker_pause()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/quiesce.sh")"
+  # It used to be debug(), which is why two separate bugs stayed invisible.
+  printf '%s' "${body}" | grep -q 'warn "docker-pause: no running container matched'
+}
+
+# -----------------------------------------------------------------------------
+# BUG 20: the ExecStopPost safety net parsed a format nobody writes
+# -----------------------------------------------------------------------------
+# quiesce.sh writes key=value; internal.sh parsed TAB-separated verb/argument
+# records. After a SIGKILL the journal was read, matched nothing, and the
+# containers stayed paused - in the one situation that path exists for.
+@test "regression: internal unquiesce uses the shared quiesce reverser" {
+  local root
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  grep -q 'quiesce_reverse_file' "${root}/lib/internal.sh"
+  # The second parser and its helpers must be gone, not merely unused.
+  ! grep -E '^internal_replay_records\(\)' "${root}/lib/internal.sh"
+  ! grep -E '^_internal_docker_unpause\(\)' "${root}/lib/internal.sh"
+}
+
+@test "regression: the reverser understands what quiesce.sh actually writes" {
+  bgb_load_lib core quiesce
+  local f="${BGB_TEST_TMP}/q.state"
+  printf 'mode=docker-pause\njob=t\nstarted=1\nids=abc123 def456\n' >"${f}"
+  # There is no docker here, so the unpause itself fails - the point is that the
+  # record is RECOGNISED. A TAB-format parser matched nothing at all.
+  run quiesce_reverse_file "${f}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Unpausing containers"* ]]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 21: the dump path carried the container ID, not its name
+# -----------------------------------------------------------------------------
+# db_plan emits "id<TAB>name<TAB>engine<TAB>tier" and db_dump_all handed the
+# engine the ID. Engines embed that in /db/<engine>/<this>/<file> and in the
+# container= tag, and dr.sh and verify.sh read it back as a NAME - so a recovery
+# looking for the dump of "shop-db-1" found /db/postgres/d9c310526af8/... The ID
+# also changes on every `compose up --force-recreate`.
+@test "regression: the engine is given the container name" {
+  local root
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "db_dump_all()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/db.sh")"
+  printf '%s' "${body}" | grep -q '"${fn}" "${name'
+  ! printf '%s' "${body}" | grep -q '"${fn}" "${c}"'
+}
+
+# -----------------------------------------------------------------------------
+# BUG 22: pg_restore defaulted to the postgres maintenance database
+# -----------------------------------------------------------------------------
+# db_postgres_restore had target="${3:-postgres}" and no caller passed a third
+# argument, so every per-database custom-format dump was restored into the
+# maintenance database: the application database stayed empty and pg_restore
+# reported success.
+@test "regression: a custom-format pg dump needs an explicit destination" {
+  local root
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  ! grep -q 'target="${3:-postgres}"' "${root}/share/db/postgres.sh"
+  grep -q 'a custom-format dump needs its destination database' "${root}/share/db/postgres.sh"
+}
+
+@test "regression: restore db passes the destination database" {
+  local root
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  grep -q '"${fn}" "${container}" - "${dbname}"' "${root}/lib/restore.sh"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 23: the Elasticsearch helper read its arguments one place to the right
+# -----------------------------------------------------------------------------
+# `sh -c "$script" _ a b c` makes `_` the shell name ($0) and a/b/c $1/$2/$3.
+# The script read $2/$3/$4, so the PATH was sent as the HTTP method and the BODY
+# as the path. Every call was malformed, and the invocation discards stderr.
+@test "regression: the elasticsearch helper reads the right positions" {
+  local root
+  root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "_db_es_curl()") == 1 {p=1} p; p && /^}/{exit}' "${root}/share/db/elasticsearch.sh")"
+  printf '%s' "${body}" | grep -q 'curl -sS -k $auth -X "$1"'
+  ! printf '%s' "${body}" | grep -q 'curl -sS -k $auth -X "$2"'
+}
+
+@test "regression: sh -c positional parameters start at 1 after the name" {
+  # The invariant the bug above violated, pinned so nobody re-derives it wrong.
+  run sh -c 'echo "0=$0 1=$1 2=$2 3=$3"' _ alpha beta gamma
+  [ "$output" = "0=_ 1=alpha 2=beta 3=gamma" ]
+}
