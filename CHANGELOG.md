@@ -1,3 +1,9 @@
+## [0.1.2](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.1.1...v0.1.2) (2026-08-03)
+
+### 🐛 Bug Fixes
+
+* **db:** repaired nine critical defects in untested paths ([4a60c32](https://github.com/bauer-group/XPD-ResticBackup/commit/4a60c326965eda61f580d11c4f3abcb572e67d3a))
+
 ## [0.1.1](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.1.0...v0.1.1) (2026-08-02)
 
 ### 🐛 Bug Fixes
