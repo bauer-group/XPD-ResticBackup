@@ -1,0 +1,87 @@
+# =============================================================================
+# bg-backup - JOB_MODE=stdin: back up the OUTPUT of a command
+# =============================================================================
+# For anything that produces a byte stream rather than files: an appliance's
+# own export, a proprietary database's dump tool, an API that hands out a
+# tarball. The stream is piped straight into the repository - it is never
+# written to disk first, so it needs no scratch space and leaves no copy behind.
+#
+# Copy to /etc/bg-backup/conf.d/30-<name>.conf, chown root:root, chmod 0640.
+# =============================================================================
+
+JOB_ENABLED=0
+JOB_DESCRIPTION="Stream a command's output into the repository"
+JOB_MODE="stdin"
+
+# -----------------------------------------------------------------------------
+# THE COMMAND - write it as an ARRAY
+# -----------------------------------------------------------------------------
+# Each element is one argument, exactly as it will be passed. No splitting, no
+# globbing, no quote removal - what you write is what runs.
+#
+JOB_STDIN_COMMAND=( /usr/local/bin/my-export --format tar )
+
+# Quoting works, because the array element IS the argument:
+#
+#   JOB_STDIN_COMMAND=( sh -c 'pg_dumpall -U postgres | grep -v ^--' )
+#
+# So do spaces in a path, which no amount of splitting can express:
+#
+#   JOB_STDIN_COMMAND=( "/opt/my tools/dump.sh" --full )
+#
+# A PLAIN STRING IS STILL ACCEPTED, and this is why you should not use one:
+# the value is split on spaces and then GLOB-EXPANDED against the working
+# directory. So
+#
+#   JOB_STDIN_COMMAND="mysqldump --databases app*"
+#
+# becomes `mysqldump --databases app1.sql app2.sql` in a directory that happens
+# to contain those files - it runs, exits 0, and stores a snapshot of something
+# other than what you configured. Whether it happens depends on what is lying
+# around that day. Quotes in a string are not honoured either: they are ordinary
+# characters by the time the split happens, so
+#
+#   JOB_STDIN_COMMAND="sh -c 'pg_dump app; echo done'"
+#
+# becomes the six words sh, -c, 'pg_dump, app;, echo, done' and fails with
+# "command not found" - for a reason that has nothing to do with the dump.
+#
+# The array form is checked by tests/e2e/installer.sh, which also proves the
+# property the next section relies on.
+
+# Where the stream lands INSIDE the repository. It is a path, not a local file:
+# nothing is written to this host.
+JOB_STDIN_FILENAME="/export/my-export.tar"
+
+# -----------------------------------------------------------------------------
+# WHY A FAILING COMMAND CANNOT PRODUCE A SNAPSHOT
+# -----------------------------------------------------------------------------
+# This mode streams through `restic backup --stdin-from-command`, which
+# propagates the command's exit status. If the command dies half way through,
+# restic aborts and NO snapshot is written.
+#
+# The obvious alternative, `my-export | restic backup --stdin`, cannot do that:
+# restic sees a stream that ended and stores the bytes that arrived as a
+# perfectly valid snapshot, reporting success. A backup system able to record a
+# truncated export as healthy is worse than none, because it also removes the
+# pressure to have one.
+#
+# Do NOT pre-compress the stream. restic already compresses (repository format
+# v2), and a compressed stream changes wholesale after the first differing byte,
+# which destroys deduplication between runs.
+
+JOB_TAGS=( export )
+JOB_SCHEDULE="daily"
+JOB_RANDOM_DELAY="30m"
+
+JOB_KEEP_LAST="7"
+JOB_KEEP_DAILY="14"
+JOB_KEEP_MONTHLY="6"
+JOB_FORGET_AFTER_BACKUP=1
+
+# A stream has no filesystem to freeze, so quiescing is the command's own
+# business - it either produces a consistent export or it does not.
+JOB_QUIESCE="none"
+
+JOB_PRE_HOOKS=()
+JOB_POST_HOOKS=()

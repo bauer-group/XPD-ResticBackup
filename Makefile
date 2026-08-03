@@ -28,7 +28,7 @@ SHELLSRC := $(shell git ls-files '*.sh' '*.bash' 2>/dev/null)
 SHELLCHECK_EXCLUDE := SC1091,SC2034
 
 .PHONY: help version lint format format-check test test-unit test-config \
-        rig-up rig-down rig-logs integration docker-e2e dr-rehearse \
+        rig-up rig-down rig-logs integration docker-e2e db-engines dr-rehearse \
         docs recovery-sheet submodules clean check-all
 
 help: ## Show this help
@@ -84,6 +84,10 @@ integration: rig-up ## Install end to end in a clean Ubuntu container (UBUNTU=22
 docker-e2e: rig-up ## JOB_MODE=docker end to end against a real daemon (privileged)
 	$(COMPOSE) build docker-victim
 	$(COMPOSE) run --rm docker-victim /opt/bgb/tests/e2e/docker-stack.sh
+
+db-engines: rig-up ## Every supported database engine, dumped consistently (privileged)
+	$(COMPOSE) build docker-victim
+	$(COMPOSE) run --rm docker-victim /opt/bgb/tests/e2e/db-engines.sh
 
 dr-rehearse: rig-up ## Full disaster-recovery rehearsal: seed, back up, destroy, restore, assert
 	$(COMPOSE) build victim phoenix

@@ -60,7 +60,7 @@ JOB_DOCKER_EXTRA_PATHS=( /etc/docker )
 # instead would record the partial stream and report success - which is the
 # single most dangerous mistake available in this problem space.
 JOB_DB_DUMP=1
-JOB_DB_ENGINES=( postgres mysql mariadb mongodb redis )
+JOB_DB_ENGINES=( postgres mysql mongodb redis influxdb clickhouse elasticsearch mssql sqlite )
 JOB_DB_EXCLUDE_CONTAINERS=()
 JOB_DB_DUMP_TIMEOUT="3600"
 

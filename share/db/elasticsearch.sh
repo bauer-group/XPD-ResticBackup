@@ -145,7 +145,16 @@ db_elasticsearch_dump() {
   # 2. Take a snapshot and WAIT for completion. wait_for_completion is what makes
   #    the next step meaningful - without it we would tar a directory that is
   #    still being written into.
-  local snap_name="bgb-${run}"
+  # LOWERCASE, and this is not cosmetic. Elasticsearch rejects any snapshot name
+  # containing an upper-case letter:
+  #     invalid_snapshot_name_exception ... must be lowercase
+  # and a bg-backup run id is a UTC timestamp - 20260803T191947Z-abc123 - so it
+  # always contains T and Z. Every Elasticsearch dump this tool has ever
+  # attempted failed on that, and the failure surfaced as the far less obvious
+  # "snapshot did not succeed (state=unknown)" because the error document has no
+  # .snapshot.state at all.
+  local snap_name
+  snap_name="bgb-$(printf '%s' "${run}" | tr '[:upper:]' '[:lower:]')"
   local resp
   resp="$(_db_es_curl "${c}" PUT \
     "/_snapshot/${BGB_ES_REPO_NAME}/${snap_name}?wait_for_completion=true" \
@@ -163,9 +172,19 @@ db_elasticsearch_dump() {
       BGB_DB_RESULT_REASON="snapshot state PARTIAL"
       ;;
     *)
-      err "elasticsearch: snapshot did not succeed (state=${state:-unknown})"
+      # No .snapshot.state means the response was an ERROR DOCUMENT, not a
+      # snapshot. Printing "state=unknown" threw away the one thing that
+      # explains the failure - Elasticsearch always says why in .error.reason.
+      local es_err
+      es_err="$(printf '%s' "${resp}" | jq -r '.error.reason // empty' 2>/dev/null)"
+      if [ -n "${es_err}" ]; then
+        err "elasticsearch: ${es_err}"
+        BGB_DB_RESULT_REASON="snapshot rejected: ${es_err}"
+      else
+        err "elasticsearch: snapshot did not succeed (state=${state:-unknown})"
+        BGB_DB_RESULT_REASON="snapshot state ${state:-unknown}"
+      fi
       BGB_DB_RESULT="failed"
-      BGB_DB_RESULT_REASON="snapshot state ${state:-unknown}"
       return "${EX_FAIL}"
       ;;
   esac

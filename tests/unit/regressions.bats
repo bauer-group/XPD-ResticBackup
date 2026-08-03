@@ -1125,3 +1125,181 @@ JSONL
   printf '%s' "${body}" | grep -q 'BGB_DB_RESULT="failed"'
   printf '%s' "${body}" | grep -q 'could not be queried'
 }
+
+# -----------------------------------------------------------------------------
+# BUG 34: the shipped engine default silently omitted four engines
+# -----------------------------------------------------------------------------
+# JOB_DB_ENGINES defaulted to five engines, so a host running InfluxDB,
+# ClickHouse, Elasticsearch, MSSQL or SQLite had that target filtered out of
+# db_plan - nothing above debug level was logged and the run reported success
+# with the database absent from the backup. For a backup tool that is the wrong
+# direction for a default to be wrong in.
+@test "regression: the engine default covers every module that exists" {
+  bgb_load_lib core config restic db
+  config_defaults
+  job_defaults_reset
+
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local f engine missing=""
+  for f in "${root}"/share/db/*.sh; do
+    engine="$(basename "${f}" .sh)"
+    db_engine_enabled "${engine}" || missing="${missing} ${engine}"
+  done
+  [ -z "${missing}" ] || {
+    echo "engines with a module but not in the default JOB_DB_ENGINES:${missing}"
+    false
+  }
+}
+
+@test "regression: the default list and BGB_DB_ENGINES_KNOWN agree" {
+  # They live in different files (lib/config.sh and lib/db.sh) and drifted once.
+  bgb_load_lib core config restic db
+  config_defaults
+  job_defaults_reset
+  local e missing=""
+  for e in ${BGB_DB_ENGINES_KNOWN}; do
+    db_engine_enabled "${e}" || missing="${missing} ${e}"
+  done
+  [ -z "${missing}" ] || {
+    echo "known engines missing from the default:${missing}"
+    false
+  }
+}
+
+@test "regression: discover derives its engine list instead of repeating it" {
+  # discover carried two hand-maintained copies and one of them had lost
+  # sqlite - the one engine that cannot be found by image name and therefore
+  # depends on discover to be noticed at all.
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  ! grep -qE 'JOB_DB_ENGINES=\(postgres' "${root}/lib/discover.sh"
+  [ "$(grep -c 'JOB_DB_ENGINES=(\${BGB_DB_ENGINES_KNOWN})' "${root}/lib/discover.sh")" -eq 2 ]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 35: Elasticsearch could never have produced a snapshot
+# -----------------------------------------------------------------------------
+# The snapshot was named after the run id, which is a UTC timestamp containing
+# T and Z. Elasticsearch rejects any snapshot name with an upper-case letter:
+#     invalid_snapshot_name_exception ... must be lowercase
+# and because an error document has no .snapshot.state, the failure surfaced as
+# the far less useful "snapshot did not succeed (state=unknown)".
+@test "regression: the elasticsearch snapshot name is lower-cased" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "db_elasticsearch_dump()") == 1 {p=1} p; p && /^}/{exit}' "${root}/share/db/elasticsearch.sh")"
+  printf '%s' "${body}" | grep -q "tr '\[:upper:\]' '\[:lower:\]'"
+  ! printf '%s' "${body}" | grep -qE 'snap_name="bgb-\$\{run\}"'
+}
+
+@test "regression: a rejected elasticsearch snapshot reports the API reason" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  grep -q 'error.reason' "${root}/share/db/elasticsearch.sh"
+}
+
+@test "regression: a run id really does contain upper-case letters" {
+  # The premise of the bug above, pinned so nobody "simplifies" the lower-casing
+  # away after deciding run ids look harmless.
+  bgb_load_lib core state
+  local id
+  id="$(state_new_run_id)"
+  [[ "${id}" =~ [A-Z] ]]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 36: JOB_STDIN_COMMAND was a string, split unquoted
+# -----------------------------------------------------------------------------
+# `cmd=(${JOB_STDIN_COMMAND})` splits on IFS and then GLOB-EXPANDS. Quotes in
+# the value are ordinary characters by then, so a quoted command fell apart and
+# failed with "command not found" - loud, but for the wrong reason. The quiet
+# failure was globbing: `mysqldump --databases app*` expanded against the
+# service's working directory, ran, exited 0, and stored a snapshot of something
+# other than what was configured.
+#
+# It is an array now, like JOB_PATHS and JOB_EXCLUDES. A string is still
+# accepted, but split with globbing OFF.
+
+_bgb_stdin_argv() {
+  # Runs backup_mode_stdin with restic stubbed out and prints the argv it built,
+  # one element per line. Everything after `--` is the command.
+  bgb_load_lib core redact json config restic state backup
+  BGB_HOSTNAME="h.example.invalid"
+  JOB_TAGS=()
+  JOB_STDIN_FILENAME="/x.dump"
+  # shellcheck disable=SC2317
+  restic_exec() { printf '%s\n' "$@"; }
+  # shellcheck disable=SC2317
+  backup_absorb_summary() { :; }
+  # shellcheck disable=SC2317
+  restic_map_rc() { return 0; }
+  # shellcheck disable=SC2317
+  tmp_file() { printf '%s' "${BGB_TEST_TMP}/stub.jsonl"; }
+
+  # backup_mode_stdin pipes restic's output through tee into BGB_JOB_LOG, so the
+  # argv the stub prints lands THERE, not on this function's stdout.
+  BGB_JOB_LOG="${BGB_TEST_TMP}/argv.txt"
+  : >"${BGB_JOB_LOG}"
+  backup_mode_stdin job RUN1 >/dev/null 2>&1
+  awk 'seen {print} /^--$/ {seen=1}' "${BGB_JOB_LOG}"
+}
+
+@test "regression: an array command reaches restic element for element" {
+  JOB_STDIN_COMMAND=(sh -c 'pg_dump app; echo done')
+  run _bgb_stdin_argv
+  [ "${lines[0]}" = "sh" ]
+  [ "${lines[1]}" = "-c" ]
+  # The whole quoted script stays ONE argument - the thing a split could not do.
+  [ "${lines[2]}" = "pg_dump app; echo done" ]
+  [ "${#lines[@]}" -eq 3 ]
+}
+
+@test "regression: an array element may contain spaces" {
+  JOB_STDIN_COMMAND=("/opt/my tools/dump.sh" --full)
+  run _bgb_stdin_argv
+  [ "${lines[0]}" = "/opt/my tools/dump.sh" ]
+  [ "${lines[1]}" = "--full" ]
+  [ "${#lines[@]}" -eq 2 ]
+}
+
+@test "regression: a legacy string is split but NOT glob-expanded" {
+  # The dangerous case: in a directory containing app1.sql and app2.sql, an
+  # unquoted expansion silently turned `app*` into those file names.
+  mkdir -p "${BGB_TEST_TMP}/globdir"
+  : >"${BGB_TEST_TMP}/globdir/app1.sql"
+  : >"${BGB_TEST_TMP}/globdir/app2.sql"
+  cd "${BGB_TEST_TMP}/globdir" || return 1
+
+  # shellcheck disable=SC2178
+  JOB_STDIN_COMMAND="mysqldump --databases app*"
+  run _bgb_stdin_argv
+  [ "${lines[0]}" = "mysqldump" ]
+  [ "${lines[1]}" = "--databases" ]
+  [ "${lines[2]}" = "app*" ]
+  [ "${#lines[@]}" -eq 3 ]
+}
+
+@test "regression: globbing is left as it was found" {
+  # The split disables globbing and must put it back, or every later expansion
+  # in the run silently stops matching.
+  JOB_STDIN_COMMAND="/bin/true"
+  case "$-" in *f*) skip "globbing already off in this shell" ;; esac
+  _bgb_stdin_argv >/dev/null
+  case "$-" in *f*) false ;; *) true ;; esac
+}
+
+@test "regression: an empty command is refused, not silently skipped" {
+  bgb_load_lib core redact json config restic state backup
+  BGB_HOSTNAME="h.example.invalid"
+  unset JOB_STDIN_COMMAND
+  run backup_mode_stdin job RUN1
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"JOB_STDIN_COMMAND"* ]]
+}
+
+@test "regression: the shipped example uses the array form" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local f="${root}/share/config/conf.d/30-stdin.conf.example"
+  [ -r "${f}" ]
+  grep -qE '^JOB_STDIN_COMMAND=\(' "${f}"
+  # And it must warn about the string form rather than merely omitting it.
+  grep -q 'glob' "${f}"
+}

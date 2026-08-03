@@ -254,7 +254,87 @@ Y="$(sha256sum <"${R}/sub/bin.dat" | cut -d' ' -f1)"
 ck $? "binary content byte-identical"
 
 # -----------------------------------------------------------------------------
-sect "9. no secret appears in doctor output"
+sect "9. a failed dump command stores NOTHING"
+
+# THE CLAIM THIS PROJECT RESTS ON, demonstrated rather than asserted in a
+# comment. lib/db.sh says a truncated database dump must never be storable as a
+# healthy snapshot, and the whole reason every engine streams through
+# `restic backup --stdin-from-command` instead of piping into `--stdin` is that
+# the former propagates the command's exit status and the latter cannot.
+#
+# Until now that was a design note. It is now a test, and it runs on every
+# supported Ubuntu.
+
+# Script files, and JOB_STDIN_COMMAND as an ARRAY. Both matter: a plain string
+# is split on spaces and then glob-expanded, so an inline `sh -c 'printf x; exit
+# 1'` would fall apart into separate words and fail for the WRONG reason - which
+# would let this test pass while proving nothing about --stdin-from-command.
+cat >/usr/local/bin/bgb-partial-dump <<'EOS'
+#!/bin/sh
+# Emits real bytes and THEN fails - the dangerous case. A command that failed
+# before writing anything would prove much less: restic would have nothing to
+# store either way.
+printf %s BEGIN-PARTIAL-PAYLOAD
+exit 1
+EOS
+cat >/usr/local/bin/bgb-good-dump <<'EOS'
+#!/bin/sh
+printf %s COMPLETE-PAYLOAD
+EOS
+chmod 0755 /usr/local/bin/bgb-partial-dump /usr/local/bin/bgb-good-dump
+
+cat >/etc/bg-backup/conf.d/60-faildump.conf <<'CONF'
+JOB_ENABLED=1
+JOB_MODE="stdin"
+JOB_STDIN_COMMAND=( /usr/local/bin/bgb-partial-dump )
+JOB_STDIN_FILENAME="/db/proof/truncated.sql"
+JOB_KEEP_LAST="5"
+JOB_FORGET_AFTER_BACKUP=0
+JOB_QUIESCE="none"
+JOB_PRE_HOOKS=()
+CONF
+chmod 0640 /etc/bg-backup/conf.d/60-faildump.conf
+
+bg-backup backup faildump >/tmp/faildump.log 2>&1
+FRC=$?
+[ "${FRC}" -ne 0 ]
+ck $? "a failing dump command fails the job (exit ${FRC})"
+
+N_BAD="$(bg-backup snapshots --job faildump --json 2>/dev/null | jq 'length')"
+[ "${N_BAD}" = "0" ]
+ck $? "no snapshot was written for the failed dump (got ${N_BAD:-?})"
+
+# And the partial bytes must not be anywhere in the repository, under any
+# snapshot. This is the assertion that would catch a future switch to --stdin.
+restic_find_partial() {
+  restic find --json 'truncated.sql' 2>/dev/null | grep -q 'truncated.sql'
+}
+export RESTIC_REPOSITORY="${REPO}"
+export RESTIC_PASSWORD="${BGB_IT_RESTIC_PASSWORD}"
+! restic_find_partial
+ck $? "the partial payload is in no snapshot at all"
+
+# The positive control: the same mechanism must still store a dump that works.
+# Without it, "no snapshot" could equally mean the job never ran.
+sed -i 's|^JOB_STDIN_COMMAND=.*|JOB_STDIN_COMMAND=( /usr/local/bin/bgb-good-dump )|' \
+  /etc/bg-backup/conf.d/60-faildump.conf
+bg-backup backup faildump >/tmp/okdump.log 2>&1
+ck $? "the same job succeeds when the command succeeds"
+
+N_OK="$(bg-backup snapshots --job faildump --json 2>/dev/null | jq 'length')"
+[ "${N_OK}" = "1" ]
+ck $? "exactly one snapshot exists now (got ${N_OK:-?})"
+
+GOT="$(bg-backup snapshots --job faildump --json 2>/dev/null | jq -r '.[0].short_id')"
+[ "$(restic dump "${GOT}" /db/proof/truncated.sql 2>/dev/null)" = "COMPLETE-PAYLOAD" ]
+ck $? "the stored payload is the complete one"
+
+unset RESTIC_REPOSITORY RESTIC_PASSWORD
+rm -f /etc/bg-backup/conf.d/60-faildump.conf \
+  /usr/local/bin/bgb-partial-dump /usr/local/bin/bgb-good-dump
+
+# -----------------------------------------------------------------------------
+sect "10. no secret appears in doctor output"
 
 # The redaction regression test, in CI rather than in a document.
 bg-backup doctor >/tmp/doctor.log 2>&1 || true
@@ -270,7 +350,7 @@ done
 ok "no passphrase in the log files"
 
 # -----------------------------------------------------------------------------
-sect "10. uninstall leaves the repository alone"
+sect "11. uninstall leaves the repository alone"
 
 BEFORE="$(bg-backup snapshots --json 2>/dev/null | jq 'length')"
 

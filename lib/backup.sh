@@ -341,16 +341,63 @@ backup_mode_docker() {
 backup_mode_stdin() {
   local job="$1" run_id="$2"
   shift 2
-  [ -n "${JOB_STDIN_COMMAND:-}" ] \
+
+  # AN ARRAY, like every other multi-valued setting in this configuration.
+  #
+  # It used to be a string split with an unquoted expansion, and bash does two
+  # things there that it never undoes: it splits on IFS, and it expands globs.
+  # Quotes inside the value are ordinary characters by that point, so a command
+  # written with them falls apart into separate words and fails with "command
+  # not found" - for a reason that has nothing to do with the dump. That much is
+  # at least loud.
+  #
+  # The quiet one is globbing: a command naming databases with a wildcard is
+  # expanded against the service working directory, so it can silently become a
+  # list of file names, run, exit 0, and store a snapshot of something other
+  # than what was configured - depending on what happens to be lying there.
+  #
+  # The array form has neither problem and matches JOB_PATHS, JOB_EXCLUDES and
+  # JOB_QUIESCE_UNITS:
+  #
+  #     JOB_STDIN_COMMAND=( sh -c 'pg_dumpall -U postgres' )
+  #
+  # A string is still accepted so an existing configuration keeps working, but
+  # globbing is disabled while it is split and a value containing a quote is
+  # reported - no amount of splitting can make quoting work.
+  local -a cmd=()
+  local decl
+  decl="$(declare -p JOB_STDIN_COMMAND 2>/dev/null || true)"
+
+  if [ "${decl#declare -a}" != "${decl}" ]; then
+    cmd=("${JOB_STDIN_COMMAND[@]}")
+  elif [ -n "${JOB_STDIN_COMMAND:-}" ]; then
+    case "${JOB_STDIN_COMMAND}" in
+      *[\"\']*)
+        warn "${job}: JOB_STDIN_COMMAND contains a quote, and quotes are NOT honoured when a string is split."
+        warn "${job}: write it as an array instead - see share/config/conf.d/30-stdin.conf.example"
+        ;;
+    esac
+    local reglob=0
+    case "$-" in
+      *f*) : ;;
+      *)
+        reglob=1
+        set -f
+        ;;
+    esac
+    # shellcheck disable=SC2206
+    cmd=(${JOB_STDIN_COMMAND})
+    [ "${reglob}" -eq 1 ] && set +f
+  fi
+
+  [ "${#cmd[@]}" -gt 0 ] \
     || die "${EX_PRECOND}" "${job}: JOB_MODE=stdin requires JOB_STDIN_COMMAND"
+
   local -a args=(backup --host "${BGB_HOSTNAME}" --json
     --stdin-from-command
     --stdin-filename "${JOB_STDIN_FILENAME:-${job}.dump}")
   mapfile -t -O "${#args[@]}" args < <(restic_tag_args "${job}" "${run_id}" "${JOB_TAGS[@]:-}" "$@")
   args+=(--)
-  # Deliberately word-split: the operator wrote a command line, not a path.
-  # shellcheck disable=SC2206
-  local -a cmd=(${JOB_STDIN_COMMAND})
   args+=("${cmd[@]}")
 
   local rc=0 jsonl

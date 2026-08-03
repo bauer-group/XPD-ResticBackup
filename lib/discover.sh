@@ -205,7 +205,14 @@ discover_databases() {
 
   # discover runs before any job is loaded, so give the planner a permissive
   # default rather than an empty engine list.
-  JOB_DB_ENGINES=(postgres mariadb mysql mongodb redis influxdb clickhouse elasticsearch mssql)
+  #
+  # Taken from BGB_DB_ENGINES_KNOWN rather than written out again: this list had
+  # been maintained by hand and had lost sqlite, so `discover` never reported a
+  # SQLite database even when the container carried the documented
+  # bg-backup.sqlite.paths label - the one engine that cannot be found by image
+  # name and therefore relies on discover to be noticed at all.
+  # shellcheck disable=SC2206
+  JOB_DB_ENGINES=(${BGB_DB_ENGINES_KNOWN})
   JOB_DB_EXCLUDE_CONTAINERS=()
 
   local -a plan=()
@@ -304,7 +311,10 @@ discover_json() {
   if have docker && docker info >/dev/null 2>&1; then
     projects="$(docker compose ls --all --format json 2>/dev/null || echo '[]')"
     lib_source db.sh
-    JOB_DB_ENGINES=(postgres mariadb mysql mongodb redis influxdb clickhouse elasticsearch mssql)
+    # Same list as discover_databases, same reason - see there. Written once,
+    # from BGB_DB_ENGINES_KNOWN, so a new engine module is picked up here too.
+    # shellcheck disable=SC2206
+    JOB_DB_ENGINES=(${BGB_DB_ENGINES_KNOWN})
     JOB_DB_EXCLUDE_CONTAINERS=()
     dbs='['
     local first=1 line c name engine tier

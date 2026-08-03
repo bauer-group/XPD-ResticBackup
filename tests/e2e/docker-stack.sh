@@ -408,7 +408,88 @@ eq "bind mount contents" "${GOT_BIND_FP}" "${WANT_BIND_FP}"
 eq "network subnet" "${GOT_SUBNET}" "${WANT_SUBNET}"
 
 # -----------------------------------------------------------------------------
-sect "9. No secret leaked along the way"
+sect "9. Volume swap, rollback and commit"
+
+# These three had never been executed. They are the only in-place, destructive
+# restore path the tool offers, and the whole safety story rests on them: swap
+# keeps the previous contents as .bgbk-old-<token>, rollback puts them back, and
+# commit is the explicit "I am satisfied, drop the safety copy". A rollback that
+# does not work turns a reversible mistake into a permanent one.
+#
+# It also exercises the cleanup registry for real: restore volume STOPS the
+# containers using the volume and registers a snippet to start them again. Until
+# recently _bgb_run_cleanup ran snippets as a command NAME, so they never ran and
+# the containers stayed down.
+
+VOL=shop_appdata
+docker exec shop-web-1 sh -c 'echo MODIFIED >/var/cache/app/cache.bin'
+MODIFIED_FP="$(docker exec shop-web-1 sha256sum /var/cache/app/cache.bin | awk '{print $1}')"
+[ "${MODIFIED_FP}" != "${WANT_VOL_FP}" ]
+ck $? "the volume was changed away from the backed-up contents"
+
+rm -f /var/lib/bg-backup/state/restore-*.swaps 2>/dev/null || true
+
+BGB_YES=1 bg-backup restore volume --name "${VOL}" --run "${RUN}" --swap --yes >/tmp/vswap.log 2>&1
+SRC_RC=$?
+[ "${SRC_RC}" -eq 0 ]
+ck $? "restore volume --swap exits 0 (got ${SRC_RC})"
+[ "${SRC_RC}" -eq 0 ] || sed 's/^/      /' /tmp/vswap.log | tail -12
+
+SWAPFILE="$(ls -1 /var/lib/bg-backup/state/restore-*.swaps 2>/dev/null | head -n1)"
+[ -n "${SWAPFILE}" ]
+ck $? "a swap record was written"
+TOKEN="$(basename "${SWAPFILE}" .swaps)"
+TOKEN="${TOKEN#restore-}"
+
+MP="$(docker volume inspect "${VOL}" --format '{{.Mountpoint}}' 2>/dev/null)"
+[ -d "${MP}.bgbk-old-${TOKEN}" ]
+ck $? "the previous contents were kept as .bgbk-old-${TOKEN}"
+
+# The containers that were stopped must be running again - this is the cleanup
+# registry, not a nicety.
+for _ in $(seq 1 30); do
+  [ "$(docker inspect -f '{{.State.Running}}' shop-web-1 2>/dev/null)" = "true" ] && break
+  sleep 1
+done
+[ "$(docker inspect -f '{{.State.Running}}' shop-web-1 2>/dev/null)" = "true" ]
+ck $? "the container stopped for the swap was started again"
+
+AFTER_SWAP="$(sha256sum "${MP}/cache.bin" 2>/dev/null | awk '{print $1}')"
+eq "the volume holds the backed-up contents" "${AFTER_SWAP}" "${WANT_VOL_FP}"
+
+# --- rollback ---------------------------------------------------------------
+bg-backup restore rollback --token "${TOKEN}" --yes >/tmp/vroll.log 2>&1
+ck $? "restore rollback exits 0"
+AFTER_ROLL="$(sha256sum "${MP}/cache.bin" 2>/dev/null | awk '{print $1}')"
+eq "rollback restored the pre-swap contents" "${AFTER_ROLL}" "${MODIFIED_FP}"
+
+# --- swap again, then commit -------------------------------------------------
+rm -f /var/lib/bg-backup/state/restore-*.swaps 2>/dev/null || true
+BGB_YES=1 bg-backup restore volume --name "${VOL}" --run "${RUN}" --swap --yes >/tmp/vswap2.log 2>&1
+ck $? "a second swap exits 0"
+
+SWAPFILE2="$(ls -1 /var/lib/bg-backup/state/restore-*.swaps 2>/dev/null | head -n1)"
+TOKEN2="$(basename "${SWAPFILE2}" .swaps)"
+TOKEN2="${TOKEN2#restore-}"
+
+bg-backup restore commit --token "${TOKEN2}" --yes >/tmp/vcommit.log 2>&1
+ck $? "restore commit exits 0"
+[ ! -e "${MP}.bgbk-old-${TOKEN2}" ]
+ck $? "commit dropped the safety copy"
+[ ! -e "${SWAPFILE2}" ]
+ck $? "commit dropped the swap record"
+
+AFTER_COMMIT="$(sha256sum "${MP}/cache.bin" 2>/dev/null | awk '{print $1}')"
+eq "the restored contents survived the commit" "${AFTER_COMMIT}" "${WANT_VOL_FP}"
+
+# An unknown token must be refused, not silently succeed - it is the difference
+# between "nothing to do" and "I deleted the wrong safety copy".
+bg-backup restore rollback --token 19700101T000000Z-1 >/tmp/vbad.log 2>&1
+[ $? -ne 0 ]
+ck $? "rollback refuses an unknown token"
+
+# -----------------------------------------------------------------------------
+sect "10. No secret leaked along the way"
 
 bg-backup doctor >/tmp/doctor.log 2>&1 || true
 ! grep -q "${BGB_IT_SECRET_KEY}" /tmp/doctor.log

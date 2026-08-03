@@ -448,7 +448,20 @@ job_defaults_reset() {
   JOB_DOCKER_INCLUDE_OVERLAY2=0
   JOB_DOCKER_EXTRA_PATHS=()
   JOB_DB_DUMP=1
-  JOB_DB_ENGINES=(postgres mysql mariadb mongodb redis)
+  # EVERY engine this tool ships a module for. It used to be five, and the four
+  # it left out - influxdb, clickhouse, elasticsearch, mssql - plus sqlite were
+  # therefore never dumped on a host that ran them: db_plan filtered the target
+  # out, nothing was logged above debug, and the run reported success. A default
+  # that silently omits engines the tool supports is the wrong default for a
+  # backup tool.
+  #
+  # Widening this is safe because each engine confirms itself before it is
+  # dumped: detection needs a matching image plus an environment or port, or an
+  # explicit container label. An engine that is not present is simply not found.
+  #
+  # MUST stay identical to BGB_DB_ENGINES_KNOWN in lib/db.sh; a unit test asserts
+  # it, because the two live in different files and drift silently.
+  JOB_DB_ENGINES=(postgres mysql mongodb redis influxdb clickhouse elasticsearch mssql sqlite)
   JOB_DB_EXCLUDE_CONTAINERS=()
   JOB_DB_DUMP_TIMEOUT="3600"
   JOB_DB_DUMP_COMPRESS=0
