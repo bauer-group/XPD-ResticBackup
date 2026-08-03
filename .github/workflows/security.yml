@@ -102,7 +102,22 @@ jobs:
     # asks for, so the SARIF upload at the end of CodeQL cannot succeed and the
     # job fails for a reason that has nothing to do with the code. Run it where
     # the token can actually write.
-    if: github.event_name != 'pull_request'
+    #
+    # AND only on a PUBLIC repository. Code scanning needs GitHub Advanced
+    # Security on a private repo, and this one has it disabled
+    # (security_and_analysis.code_security.status = disabled), so the analyse
+    # step fails with
+    #     Code Security must be enabled for this repository to use code scanning
+    # every single run - a permanently red job that says nothing about the code.
+    #
+    # This is a gate, not a removal: the whole point of the project is a repo the
+    # installer can be curl-piped from, so it becomes public, and on a public
+    # repository code scanning is free and this job starts running by itself.
+    # Until then the workflow risk surface is covered by actionlint in the
+    # release gate, which is what CodeQL's `actions` pack largely duplicates.
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.event.repository.visibility == 'public'
     uses: bauer-group/automation-templates/.github/workflows/modules-codeql.yml@main
     permissions:
       contents: read
@@ -129,6 +144,28 @@ jobs:
       security-events: write
       actions: read
       packages: read
+    with:
+      # trivy only, NOT the default 'both'. Two independent reasons:
+      #
+      #   1. The module's OSV step is broken upstream - it references
+      #      google/osv-scanner-action at the repository root instead of the
+      #      action's subdirectory, so every run dies with
+      #        Top level 'runs:' section is required for
+      #        google/osv-scanner-action/v2.3.5/action.yml
+      #      That belongs in bauer-group/automation-templates, not here.
+      #   2. Even fixed, OSV-Scanner would find nothing: it reads dependency
+      #      lockfiles and this repository has none. The real third-party
+      #      surface is the pinned restic binary (version + SHA256 in
+      #      install.sh, checked by the installer e2e) and the pinned actions
+      #      (Dependabot) - see docs/adr/. A green OSV run here would be
+      #      coverage theatre either way.
+      #
+      # Trivy still runs and still gates: it scans the filesystem rather than a
+      # manifest, so it is the engine that can actually see something here.
+      #
+      # Revisit when: the module's OSV action reference is fixed AND this repo
+      # gains a dependency manifest.
+      scan-engine: 'trivy'
     secrets: inherit
 
   license-compliance:
