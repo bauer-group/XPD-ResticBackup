@@ -80,18 +80,35 @@ fi
 exec "$bin" $extra -S localhost -U "$user" -P "$pw" -b "$@"
 '
 
+# Sets _DB_MSSQL_QUERY_ERR and returns the client's exit status, so a caller can
+# tell "the query ran and returned nothing" from "the query never ran".
+# Discarding stderr here made a failed login, a missing sqlcmd and a genuinely
+# empty instance produce the identical empty string.
 _db_mssql_query() {
-  local c="$1" q="$2"
-  docker exec -i "${c}" sh -c "${_DB_MSSQL_SQLCMD_SH}" _ -h -1 -W -Q "SET NOCOUNT ON; ${q}" 2>/dev/null
+  local c="$1" q="$2" ef rc=0
+  _DB_MSSQL_QUERY_ERR=""
+  ef="$(mktemp "${TMPDIR:-/tmp}/bgb-mssql-err.XXXXXX" 2>/dev/null)" || ef=""
+  if [ -n "${ef}" ]; then
+    docker exec -i "${c}" sh -c "${_DB_MSSQL_SQLCMD_SH}" _ -h -1 -W -Q "SET NOCOUNT ON; ${q}" 2>"${ef}" || rc=$?
+    _DB_MSSQL_QUERY_ERR="$(tr -d '' <"${ef}" | head -c 2000)"
+    rm -f "${ef}"
+  else
+    docker exec -i "${c}" sh -c "${_DB_MSSQL_SQLCMD_SH}" _ -h -1 -W -Q "SET NOCOUNT ON; ${q}" 2>/dev/null || rc=$?
+  fi
+  return "${rc}"
 }
 
 _db_mssql_databases() {
-  local c="$1"
+  local c="$1" out rc=0
   # Exclude the system databases: master/model/msdb are rebuilt by the engine and
   # tempdb cannot be backed up at all.
-  _db_mssql_query "${c}" \
-    "SELECT name FROM sys.databases WHERE database_id > 4 AND state_desc = 'ONLINE';" \
-    | sed '/^$/d' | tr -d '\r'
+  #
+  # The client's status is captured and returned. Piping straight into sed/tr
+  # discarded it - both succeed on empty input - so a failed sqlcmd looked
+  # exactly like an instance with no user databases.
+  out="$(_db_mssql_query "${c}" "SELECT name FROM sys.databases WHERE database_id > 4 AND state_desc = 'ONLINE';")" || rc=$?
+  printf '%s' "${out}" | sed '/^$/d' | tr -d ''
+  return "${rc}"
 }
 
 # -----------------------------------------------------------------------------
@@ -125,11 +142,26 @@ db_mssql_dump() {
   BGB_DB_RESULT_REASON=""
   require_cmd docker
 
+  # "No user databases" and "the query never ran" are different outcomes and must
+  # not share a verdict. They used to: stderr was discarded, an empty list meant
+  # BGB_DB_RESULT=skipped, and a wrong password or a missing sqlcmd produced a
+  # green run that had backed up nothing at all. redis.sh already makes this
+  # distinction for an unavailable CONFIG GET; this now matches it.
   local -a dbs=()
-  mapfile -t dbs < <(_db_mssql_databases "${c}")
+  local qrc=0
+  mapfile -t dbs < <(_db_mssql_databases "${c}") || true
+  _db_mssql_query "${c}" "SELECT 1;" >/dev/null || qrc=$?
+
+  if [ "${qrc}" -ne 0 ]; then
+    err "mssql: ${c}: the instance could not be queried - NOT backed up"
+    [ -n "${_DB_MSSQL_QUERY_ERR:-}" ] && err "  sqlcmd: ${_DB_MSSQL_QUERY_ERR}"
+    BGB_DB_RESULT="failed"
+    BGB_DB_RESULT_REASON="sqlcmd could not query the instance (login, permissions or a missing client)"
+    return "${EX_FAIL}"
+  fi
 
   if [ "${#dbs[@]}" -eq 0 ]; then
-    warn "mssql: ${c}: no user databases found (or sqlcmd is unavailable)"
+    log "mssql: ${c}: reachable, and it holds no user databases"
     BGB_DB_RESULT="skipped"
     BGB_DB_RESULT_REASON="no user databases"
     return "${EX_OK}"

@@ -105,24 +105,17 @@ docs: ## Where the generated documentation comes from
 	@printf '  validates for exactly that name and fails on README.md.\n\n'
 	@printf '  SECURITY.md and the docs/ tree are hand-written and are not generated.\n\n'
 
-recovery-sheet: ## NOT IMPLEMENTED - see the message
+recovery-sheet: ## Print the one-page recovery sheet (needs a configured host)
 	@# This called scripts/render-recovery-sheet.sh, which does not exist - and
-	@# neither does scripts/, nor share/dr/recovery-sheet.tmpl, nor a `sheet`
-	@# subcommand. The target failed with "No such file or directory", which
-	@# reads like a broken checkout rather than a missing feature.
+	@# neither does scripts/. The renderer was never missing: it is
+	@# secrets_render_sheet() in lib/secrets.sh, reached through the CLI below.
+	@# The target simply pointed at the wrong thing and failed with "No such
+	@# file or directory", which reads like a broken checkout.
 	@#
-	@# Saying so out loud matters more here than for an ordinary TODO: the DR
-	@# rehearsal's premise is "the replacement host receives ONLY what the
-	@# recovery sheet lists", and docs/recovery-sheet.md describes the artefact
-	@# as if it could be produced. It cannot be, yet.
-	@printf '\n  \033[31mNot implemented.\033[0m The recovery sheet has no renderer yet:\n\n'
-	@printf '    share/dr/recovery-sheet.tmpl   missing (the layout)\n'
-	@printf '    a `bg-backup secrets sheet`    missing (the data)\n\n'
-	@printf '  docs/recovery-sheet.md describes what it must contain, and\n'
-	@printf '  tests/e2e/dr-restore-and-assert.sh already enforces the property\n'
-	@printf '  that matters: the phoenix host gets nothing the sheet would not\n'
-	@printf '  carry. Producing the printable page is still open.\n\n'
-	@exit 1
+	@# It needs the host's real configuration - repository URL, repository ID,
+	@# bundle location and checksum - so it runs on a configured machine, not in
+	@# a working tree. Redirect it to a file with --out.
+	bash bin/bg-backup.sh secrets print-recovery-card
 
 submodules: ## Ensure the vendored bats helpers are present
 	@test -x $(BATS) || git submodule update --init --recursive

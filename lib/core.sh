@@ -170,9 +170,22 @@ _bgb_run_cleanup() {
   local i handler
   for ((i = ${#_BGB_CLEANUP_HANDLERS[@]} - 1; i >= 0; i--)); do
     handler="${_BGB_CLEANUP_HANDLERS[i]}"
+    # A handler is either a FUNCTION NAME or a shell SNIPPET, and they need
+    # different invocations. This ran every handler as `"${handler}"`, which
+    # treats the whole string as one command NAME - so a snippet like
+    #     docker start abc123 >/dev/null 2>&1 || true
+    # became a "command not found" that the trailing `|| true` then swallowed.
+    # Nothing registered as a snippet has ever run: `restore volume` never
+    # restarted the containers it stopped, `mount` never released its FUSE
+    # mount, and every `verify` left its scratch container and network behind.
+    #
     # Never let a failing handler abort the remaining ones, and never let it
     # change the exit code we are on our way to returning.
-    "${handler}" || true
+    if declare -F "${handler}" >/dev/null 2>&1; then
+      "${handler}" || true
+    else
+      eval "${handler}" || true
+    fi
   done
   _BGB_CLEANUP_HANDLERS=()
 }

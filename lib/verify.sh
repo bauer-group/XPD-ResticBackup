@@ -386,8 +386,8 @@ verify_databases() {
     local oldest
     oldest="$(restic_capture snapshots --json --tag kind=dbdump 2>/dev/null \
       | jq -r 'sort_by(.time) | first | [.short_id, (.paths[0]//""|ltrimstr("/")),
-                       ((.tags[]|select(startswith("engine="))|sub("engine=";""))//""),
-                       ((.tags[]|select(startswith("container="))|sub("container=";""))//"")] | @tsv' 2>/dev/null)"
+                       (first(.tags[]|select(startswith("db="))|sub("db=";""))//""),
+                       ((.paths[0]//"")|split("/")|.[3]//"")] | @tsv' 2>/dev/null)"
     if [ -n "${oldest}" ]; then
       IFS=$'\t' read -r snap path engine container <<<"${oldest}"
       verify_one_dump "${snap}" "${path}" "${engine}" "${container}" || rc="${EX_VERIFY}"
@@ -431,24 +431,42 @@ verify_one_dump() {
     return "${EX_VERIFY}"
   fi
 
-  case "${engine}" in
-    postgres | mysql | mariadb)
-      local tail_txt
-      tail_txt="$(restic_exec dump "${snap}" "/${path}" 2>/dev/null | tail -c 400 || true)"
-      case "${tail_txt}" in
-        *"PostgreSQL database dump complete"* | *"Dump completed on"* | *"-- Dump completed"*)
-          debug "${container}: dump trailer present"
-          ;;
-        *)
-          # A dump without its completion marker was cut short. restic's
-          # --stdin-from-command should have prevented this, so finding one
-          # means something upstream is wrong.
-          bad_mark "${container}: dump has no completion marker - it is truncated"
-          return "${EX_VERIFY}"
-          ;;
-      esac
-      ;;
-  esac
+  # BRANCH ON THE ARTIFACT, NOT THE ENGINE. PostgreSQL produces TWO shapes and
+  # only one of them is text: globals.sql is plain SQL from pg_dumpall, while
+  # every per-database dump is pg_dump --format=custom - a BINARY archive whose
+  # last 400 bytes are compressed offsets and can never contain the phrase
+  # "PostgreSQL database dump complete". Checking every postgres artifact for a
+  # text trailer therefore reported every healthy custom-format dump as
+  # truncated, which trains an operator to ignore verify.
+  #
+  # A custom archive starts with the five bytes PGDMP, and pg_dump writes the
+  # header first - so a truncated one is caught by the size check above and by
+  # the restore-into-scratch test below, which is the real proof anyway.
+  local _first5
+  _first5="$(restic_exec dump "${snap}" "/${path}" 2>/dev/null | head -c 5 || true)"
+
+  if [ "${_first5}" = "PGDMP" ]; then
+    debug "${container}: PostgreSQL custom-format archive - header OK, no text trailer expected"
+  else
+    case "${engine}" in
+      postgres | mysql | mariadb)
+        local tail_txt
+        tail_txt="$(restic_exec dump "${snap}" "/${path}" 2>/dev/null | tail -c 400 || true)"
+        case "${tail_txt}" in
+          *"PostgreSQL database dump complete"* | *"Dump completed on"* | *"-- Dump completed"*)
+            debug "${container}: dump trailer present"
+            ;;
+          *)
+            # A dump without its completion marker was cut short. restic's
+            # --stdin-from-command should have prevented this, so finding one
+            # means something upstream is wrong.
+            bad_mark "${container}: dump has no completion marker - it is truncated"
+            return "${EX_VERIFY}"
+            ;;
+        esac
+        ;;
+    esac
+  fi
 
   ok_mark "${container} (${engine}): $(human_bytes "${size}"), trailer OK"
 

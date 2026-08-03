@@ -146,12 +146,34 @@ _quiesce_docker_pause() {
   chmod 0600 "${f}"
 
   log "Pausing ${#ids[@]} container(s) for a consistent read"
-  docker pause "${ids[@]}" >/dev/null 2>&1 || {
-    warn "docker pause failed - continuing without a quiesce window"
-    _BGB_QUIESCE_ACTIVE=0
+  local perr rc=0
+  perr="$(docker pause "${ids[@]}" 2>&1)" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    # THE JOURNAL MUST SURVIVE. `docker pause a b c` is not atomic: it pauses
+    # what it can and reports the failures, so a partial failure leaves some
+    # containers paused. Deleting the journal and clearing the active flag here
+    # disarmed all three reversal mechanisms at once - the EXIT trap, the /run
+    # journal and ExecStopPost - and left those containers paused indefinitely,
+    # while the run carried on and reported success.
+    #
+    # Keep the file, say what docker said, and unpause immediately: the caller
+    # asked for consistency and cannot have it, so service comes first.
+    err "docker pause failed - undoing the partial pause"
+    local line
+    while IFS= read -r line; do
+      [ -n "${line}" ] && err "  docker: ${line}"
+    done <<<"${perr}"
+
+    quiesce_reverse_file "${f}"
     rm -f "${f}"
+    _BGB_QUIESCE_ACTIVE=0
+
+    # Not a silent downgrade: a backup taken without the consistency it was
+    # configured for is degraded, and the run must say so.
+    BGB_RUN_DEGRADED_REASON="docker pause failed - the file backup is not crash-consistent"
+    warn "Continuing WITHOUT a quiesce window - this backup is not crash-consistent"
     return 0
-  }
+  fi
 }
 
 _quiesce_docker_stop() {
@@ -313,6 +335,26 @@ quiesce_cleanup_handler() {
 #
 # The trade-off is stated plainly: we give up the backup to give back the
 # service. A missed backup is recoverable tomorrow; an unbounded outage is not.
+# quiesce_remaining_seconds - seconds left of the configured freeze window.
+# Prints nothing when no quiesce is active or no cap is configured, which is the
+# signal for "run without a deadline".
+#
+# This exists because quiesce_check_deadline() below had NO CALLERS: the
+# documented hard cap JOB_QUIESCE_MAX_SECONDS was never enforced and a freeze
+# window was unbounded, so a wedged repository could hold a production database
+# paused for as long as restic kept retrying. Polling a check function needs the
+# work to run in the background; wrapping the work in `timeout` needs only the
+# number, and restic_exec_logged() applies it whenever a quiesce is held.
+quiesce_remaining_seconds() {
+  [ "${_BGB_QUIESCE_ACTIVE}" -eq 1 ] || return 0
+  [ "${JOB_QUIESCE_MAX_SECONDS:-0}" -gt 0 ] || return 0
+  local left=$((JOB_QUIESCE_MAX_SECONDS - ($(now_epoch) - _BGB_QUIESCE_START)))
+  # Never emit 0 or a negative number: `timeout 0` means "no timeout", which is
+  # the exact opposite of what an exhausted budget should do.
+  [ "${left}" -lt 1 ] && left=1
+  printf '%s' "${left}"
+}
+
 quiesce_check_deadline() {
   [ "${_BGB_QUIESCE_ACTIVE}" -eq 1 ] || return 0
   [ "${JOB_QUIESCE_MAX_SECONDS:-0}" -gt 0 ] || return 0

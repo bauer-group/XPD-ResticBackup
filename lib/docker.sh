@@ -430,6 +430,28 @@ docker_dedup_paths() {
 # -----------------------------------------------------------------------------
 # Images
 # -----------------------------------------------------------------------------
+# docker_backed_up_containers - every container the backup COVERS, running or not.
+#
+# `docker ps -q` lists only RUNNING containers, while the manifest and the path
+# collection both use `docker ps -aq`. A container that is stopped or crashed at
+# backup time therefore had its volumes, compose files and manifest entry backed
+# up, but was invisible to the two functions below - so a locally-built image it
+# depends on was neither warned about nor exported, and the stack could not be
+# recreated at all. A stopped container is exactly the one whose image is most
+# likely to be missing.
+docker_backed_up_containers() {
+  local -a projects=()
+  mapfile -t projects < <(docker_select_projects 2>/dev/null || true)
+  if [ "${#projects[@]}" -eq 0 ]; then
+    docker ps -aq 2>/dev/null || true
+    return 0
+  fi
+  local p
+  for p in "${projects[@]}"; do
+    [ -n "${p}" ] && docker_project_containers "${p}"
+  done
+}
+
 docker_warn_local_images() {
   local c tag missing=0
   while IFS= read -r c; do
@@ -440,10 +462,10 @@ docker_warn_local_images() {
       warn "Image '${tag}' has no registry digest (built locally, never pushed)"
       missing=$((missing + 1))
     fi
-  done < <(docker ps -q 2>/dev/null || true)
+  done < <(docker_backed_up_containers | sort -u)
 
   if [ "${missing}" -gt 0 ]; then
-    warn "${missing} running container(s) use an image that exists only on this host."
+    warn "${missing} backed-up container(s) use an image that exists only on this host."
     warn "They cannot be pulled during a restore. JOB_DOCKER_EXPORT_IMAGES=${JOB_DOCKER_EXPORT_IMAGES}"
     [ "${JOB_DOCKER_EXPORT_IMAGES}" = "none" ] \
       && warn "With EXPORT_IMAGES=none these stacks are NOT restorable. Set it to 'missing'."
@@ -454,6 +476,9 @@ docker_export_images() {
   local job="$1" run_id="$2"
   local c tag rc=0
 
+  # Same set the manifest covers, stopped containers included - see
+  # docker_backed_up_containers(). Exporting only what happens to be running
+  # means the one image a crashed service needs is the one not in the backup.
   while IFS= read -r c; do
     [ -n "${c}" ] || continue
     tag="$(docker inspect "${c}" 2>/dev/null | jq -r '.[0].Config.Image // empty')"
@@ -475,6 +500,6 @@ docker_export_images() {
       --tag "bg-backup=1" --tag "job=${job}" --tag "run=${run_id}" \
       --tag "kind=image" --tag "image=${tag}" \
       -- docker save "${tag}" >>"${BGB_JOB_LOG}" 2>&1 || rc=$?
-  done < <(docker ps -q 2>/dev/null || true)
+  done < <(docker_backed_up_containers | sort -u)
   return "${rc}"
 }

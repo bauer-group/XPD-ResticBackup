@@ -38,6 +38,16 @@ cmd_discover() {
 
   config_load
 
+  # config_load() reads the GLOBAL configuration; it does not populate the JOB_*
+  # surface, because a job's settings only exist once a job is selected.
+  # `discover` has no job, yet it calls straight into docker_collect_paths(),
+  # which dereferences JOB_DOCKER_INCLUDE_COMPOSE_FILES and friends. Under
+  # `set -u` those are unbound, and because the call happens inside a process
+  # substitution the abort surfaced as an empty result rather than an error -
+  # `discover` printed no Docker paths at all and looked like a host with
+  # nothing to back up.
+  job_defaults_reset
+
   if [ "${BGB_JSON}" = "1" ]; then
     discover_json
     return 0

@@ -1154,18 +1154,53 @@ dr_restore_project() {
     return 0
   }
 
-  local v
+  # STOP THE PROJECT BEFORE TOUCHING ITS VOLUMES.
+  #
+  # Writing into /var/lib/docker/volumes/<v>/_data while a database has that
+  # directory open is not a restore, it is corruption of both copies: the engine
+  # holds pages and a write-ahead log for the file it had, restic replaces the
+  # bytes underneath it, and what ends up on disk belongs to neither. The volumes
+  # were restored straight to `--target /` with the stack still running.
+  local -a running=()
+  mapfile -t running < <(docker ps -q --filter "label=com.docker.compose.project=${project}" 2>/dev/null || true)
+  if [ "${#running[@]}" -gt 0 ]; then
+    err "Project '${project}' has ${#running[@]} running container(s)."
+    err "Restoring a volume underneath a running database corrupts both copies."
+    confirm "Stop them, restore, and start them again?" || return "${EX_SAFETY}"
+    log "Stopping ${#running[@]} container(s)"
+    docker stop "${running[@]}" >/dev/null 2>&1 || warn "docker stop reported an error"
+    # If this dies mid-restore the stack comes back up rather than staying down.
+    on_cleanup "docker start ${running[*]} >/dev/null 2>&1 || true"
+  fi
+
+  local v vrc=0
   while IFS= read -r v; do
     [ -n "${v}" ] || continue
     log "Restoring volume ${v}"
-    restic_exec restore "${snap}" --target / --include "${v}" >/dev/null 2>&1 \
-      || warn "could not restore ${v}"
+    # NOT >/dev/null 2>&1: a volume that fails to restore is the whole point of
+    # the operation, and hiding restic's reason left "could not restore" as the
+    # only evidence an operator ever saw.
+    restic_exec restore "${snap}" --target / --include "${v}" || {
+      err "could not restore ${v}"
+      vrc=1
+    }
   done < <(jq -r --arg p "${project}" \
     '.projects[] | select(.name==$p) | .containers[]?.mounts[]? | select(.type=="volume") | .source' "${mf}" | sort -u)
+
+  if [ "${vrc}" -ne 0 ]; then
+    err "At least one volume could not be restored - NOT starting the stack."
+    err "Starting it now would run the application against a half-restored dataset."
+    return "${EX_REPO}"
+  fi
 
   if [ "${recreate}" = "1" ]; then
     log "Recreating the stack"
     (cd "${wd}" && docker compose up -d --force-recreate)
+  elif [ "${#running[@]}" -gt 0 ]; then
+    # They were running when this started, so leaving them stopped would be an
+    # outage caused by a restore that otherwise succeeded.
+    log "Starting the ${#running[@]} container(s) that were running before"
+    docker start "${running[@]}" >/dev/null 2>&1 || warn "could not start every container - check docker ps -a"
   else
     log "Files restored. Bring the stack up with:  cd ${wd} && docker compose up -d"
   fi

@@ -853,3 +853,275 @@ JSONL
   run sh -c 'echo "0=$0 1=$1 2=$2 3=$3"' _ alpha beta gamma
   [ "$output" = "0=_ 1=alpha 2=beta 3=gamma" ]
 }
+
+# -----------------------------------------------------------------------------
+# BUG 24: a cleanup handler registered as a snippet never ran
+# -----------------------------------------------------------------------------
+# _bgb_run_cleanup invoked every handler as `"${handler}"`, which treats the
+# whole string as one command NAME. Every snippet became a "command not found"
+# that the trailing `|| true` swallowed, so nothing registered as a snippet had
+# ever run: `restore volume` never restarted the containers it stopped, `mount`
+# never released its FUSE mount, and every `verify` leaked its scratch container
+# and network.
+@test "regression: a string cleanup handler is executed" {
+  bgb_load_lib core
+  local marker="${BGB_TEST_TMP}/cleanup-ran"
+  on_cleanup "touch '${marker}'"
+  _bgb_run_cleanup
+  [ -f "${marker}" ]
+}
+
+@test "regression: a function cleanup handler still works" {
+  bgb_load_lib core
+  local marker="${BGB_TEST_TMP}/fn-ran"
+  # shellcheck disable=SC2317
+  _bgb_test_handler() { touch "${marker}"; }
+  on_cleanup _bgb_test_handler
+  _bgb_run_cleanup
+  [ -f "${marker}" ]
+}
+
+@test "regression: a failing cleanup handler does not stop the others" {
+  bgb_load_lib core
+  local marker="${BGB_TEST_TMP}/second-ran"
+  on_cleanup "touch '${marker}'"
+  on_cleanup "false"
+  run _bgb_run_cleanup
+  [ "$status" -eq 0 ]
+  [ -f "${marker}" ]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 25: engine aliases had no dispatch, and the run stayed green
+# -----------------------------------------------------------------------------
+# Every module advertises aliases through db_<engine>_aliases(), but the
+# canonicalisation table held only mariadb/percona and opensearch. A container
+# labelled backup.bauer-group.com/engine=postgresql loaded postgres.sh and then
+# looked for db_postgresql_dump, which does not exist - the target was skipped
+# with a warning, counted as neither attempted nor failed, and the database was
+# absent from the backup.
+@test "regression: every alias a module declares canonicalises to that module" {
+  bgb_load_lib core config restic db
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local f engine alias bad=""
+  for f in "${root}"/share/db/*.sh; do
+    engine="$(basename "${f}" .sh)"
+    # shellcheck disable=SC1090
+    . "${f}"
+    declare -F "db_${engine}_aliases" >/dev/null 2>&1 || continue
+    while IFS= read -r alias; do
+      [ -n "${alias}" ] || continue
+      [ "$(db_engine_canonical "${alias}")" = "${engine}" ] \
+        || bad="${bad} ${alias}->$(db_engine_canonical "${alias}")(want ${engine})"
+    done < <("db_${engine}_aliases")
+  done
+  [ -z "${bad}" ] || {
+    echo "aliases that do not canonicalise to their own module:${bad}"
+    false
+  }
+}
+
+@test "regression: a canonical engine name maps to itself" {
+  bgb_load_lib core config restic db
+  local e
+  for e in postgres mysql mongodb redis influxdb clickhouse elasticsearch mssql sqlite; do
+    [ "$(db_engine_canonical "${e}")" = "${e}" ] || {
+      echo "canonical name changed: ${e} -> $(db_engine_canonical "${e}")"
+      false
+    }
+  done
+}
+
+@test "regression: JOB_DB_ENGINES accepts an alias" {
+  bgb_load_lib core config restic db
+  JOB_DB_ENGINES=(postgresql valkey)
+  db_engine_enabled postgres
+  db_engine_enabled redis
+  ! db_engine_enabled mongodb
+}
+
+# -----------------------------------------------------------------------------
+# BUG 26: a target that cannot be dumped was neither counted nor failed
+# -----------------------------------------------------------------------------
+# Both "no engine module" and "no dump function" branches `continue`d before the
+# attempt counter, so the run reported "0 attempted, 0 failed" and exited 0 with
+# that database missing. `skipped` is for a target we deliberately do not dump;
+# this is not that.
+@test "regression: an undumpable target counts as a failure" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "db_dump_all()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/db.sh")"
+  # The counter must be incremented BEFORE the two bail-out branches.
+  local cnt_line bail_line
+  cnt_line="$(printf '%s\n' "${body}" | grep -n 'count=\$((count + 1))' | head -1 | cut -d: -f1)"
+  bail_line="$(printf '%s\n' "${body}" | grep -n 'No engine module for' | head -1 | cut -d: -f1)"
+  [ -n "${cnt_line}" ] && [ -n "${bail_line}" ]
+  [ "${cnt_line}" -lt "${bail_line}" ]
+  # And both branches must record a failure.
+  printf '%s' "${body}" | grep -q 'provides no dump function'
+  [ "$(printf '%s\n' "${body}" | grep -c 'failed=$((failed + 1))')" -ge 3 ]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 27: the quiesce deadline was documented and never enforced
+# -----------------------------------------------------------------------------
+# quiesce_check_deadline() had no callers, so JOB_QUIESCE_MAX_SECONDS capped
+# nothing and a wedged repository could hold a production database paused
+# indefinitely.
+@test "regression: the quiesce deadline reaches the restic invocation" {
+  bgb_load_lib core config quiesce
+  _BGB_QUIESCE_ACTIVE=1
+  _BGB_QUIESCE_START="$(now_epoch)"
+  JOB_QUIESCE_MAX_SECONDS=600
+  run quiesce_remaining_seconds
+  [ -n "$output" ]
+  [ "$output" -gt 0 ]
+  [ "$output" -le 600 ]
+
+  # No quiesce held, or no cap configured: no deadline.
+  _BGB_QUIESCE_ACTIVE=0
+  run quiesce_remaining_seconds
+  [ -z "$output" ]
+  _BGB_QUIESCE_ACTIVE=1
+  JOB_QUIESCE_MAX_SECONDS=0
+  run quiesce_remaining_seconds
+  [ -z "$output" ]
+}
+
+@test "regression: an exhausted budget never becomes an infinite timeout" {
+  # `timeout 0` means "no timeout", which is the exact opposite of what an
+  # expired window must do.
+  bgb_load_lib core config quiesce
+  _BGB_QUIESCE_ACTIVE=1
+  JOB_QUIESCE_MAX_SECONDS=10
+  _BGB_QUIESCE_START=$(($(now_epoch) - 3600))
+  run quiesce_remaining_seconds
+  [ "$output" -ge 1 ]
+}
+
+@test "regression: restic_exec_logged applies the deadline while quiesced" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "restic_exec_logged()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/restic.sh")"
+  printf '%s' "${body}" | grep -q 'quiesce_remaining_seconds'
+  printf '%s' "${body}" | grep -q 'kill-after=30'
+}
+
+# -----------------------------------------------------------------------------
+# BUG 28: a failed docker pause deleted the journal
+# -----------------------------------------------------------------------------
+# `docker pause a b c` is not atomic. A partial failure left containers paused
+# while the handler removed the journal and cleared the active flag, disarming
+# the EXIT trap, the /run journal and ExecStopPost at once.
+@test "regression: a failed pause reverses instead of discarding the journal" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "_quiesce_docker_pause()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/quiesce.sh")"
+  printf '%s' "${body}" | grep -q 'quiesce_reverse_file'
+  printf '%s' "${body}" | grep -q 'BGB_RUN_DEGRADED_REASON'
+}
+
+@test "regression: stale-quiesce recovery happens behind the job lock" {
+  # It ran before the lock, so a second invocation un-quiesced a run that was
+  # still in progress and deleted its journal.
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local lock_line recover_line
+  lock_line="$(grep -n 'lock_take_job' "${root}/lib/backup.sh" | head -1 | cut -d: -f1)"
+  recover_line="$(grep -n 'quiesce_recover_stale' "${root}/lib/backup.sh" | head -1 | cut -d: -f1)"
+  [ -n "${lock_line}" ] && [ -n "${recover_line}" ]
+  [ "${lock_line}" -lt "${recover_line}" ]
+}
+
+# -----------------------------------------------------------------------------
+# BUG 29: verify called every PostgreSQL dump truncated
+# -----------------------------------------------------------------------------
+# pg_dump --format=custom is a BINARY archive; its last 400 bytes are compressed
+# offsets and can never contain "PostgreSQL database dump complete". Checking
+# every postgres artifact for a text trailer reported healthy dumps as truncated,
+# which trains an operator to ignore verify.
+@test "regression: verify branches on the artifact, not the engine" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "verify_one_dump()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/verify.sh")"
+  printf '%s' "${body}" | grep -q 'PGDMP'
+}
+
+@test "regression: verify reads the tag the engines actually write" {
+  # It looked for engine= and container=, which no module emits - the engines
+  # write db=<engine> and the container is the third path segment.
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  ! grep -q 'select(startswith("engine="))' "${root}/lib/verify.sh"
+  ! grep -q 'select(startswith("container="))' "${root}/lib/verify.sh"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 30: discover aborted because the JOB_* surface was never initialised
+# -----------------------------------------------------------------------------
+# config_load reads the GLOBAL configuration only. cmd_discover then called
+# docker_collect_paths, which dereferences JOB_DOCKER_* under `set -u` inside a
+# process substitution - so the abort surfaced as an empty result and the host
+# looked like it had nothing to back up.
+@test "regression: discover initialises the job defaults" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "cmd_discover()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/discover.sh")"
+  printf '%s' "${body}" | grep -q 'job_defaults_reset'
+}
+
+# -----------------------------------------------------------------------------
+# BUG 31: image export and warnings ignored stopped containers
+# -----------------------------------------------------------------------------
+# The manifest and the path collection use `docker ps -aq`; these two used
+# `docker ps -q`. A stopped container's locally-built image was neither warned
+# about nor exported, and a stopped container is exactly the one whose image is
+# most likely to be missing at restore time.
+@test "regression: image handling covers the same containers as the manifest" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local f
+  for f in docker_warn_local_images docker_export_images; do
+    local body
+    body="$(awk -v n="${f}" 'index($0, n "()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/docker.sh")"
+    printf '%s' "${body}" | grep -q 'docker_backed_up_containers' || {
+      echo "${f} does not use the shared enumeration"
+      false
+    }
+    printf '%s' "${body}" | grep -q 'docker ps -q ' && {
+      echo "${f} still enumerates running containers only"
+      false
+    }
+  done
+  true
+}
+
+# -----------------------------------------------------------------------------
+# BUG 32: a project restore overwrote volumes under running containers
+# -----------------------------------------------------------------------------
+# dr_restore_project wrote every named-volume mountpoint straight to `--target /`
+# with the stack running. Replacing the bytes under an open database corrupts
+# both copies, and restic's own error was hidden by >/dev/null 2>&1.
+@test "regression: a project restore stops the stack first" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local body
+  body="$(awk 'index($0, "dr_restore_project()") == 1 {p=1} p; p && /^}/{exit}' "${root}/lib/dr.sh")"
+  printf '%s' "${body}" | grep -q 'docker stop'
+  printf '%s' "${body}" | grep -q 'confirm '
+  # A failed volume restore must not be followed by starting the application.
+  printf '%s' "${body}" | grep -q 'NOT starting the stack'
+  # And restic's own error must be visible.
+  ! printf '%s' "${body}" | grep -q 'include "${v}" >/dev/null 2>&1'
+}
+
+# -----------------------------------------------------------------------------
+# BUG 33: mssql could not tell "no databases" from "could not ask"
+# -----------------------------------------------------------------------------
+# The query discarded stderr and its exit status, so a failed login, a missing
+# sqlcmd and a genuinely empty instance all produced an empty list - reported as
+# skipped, with a green run that had backed up nothing.
+@test "regression: an unreachable mssql instance is a failure, not a skip" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  grep -q '_DB_MSSQL_QUERY_ERR' "${root}/share/db/mssql.sh"
+  local body
+  body="$(awk 'index($0, "db_mssql_dump()") == 1 {p=1} p; p && /^}/{exit}' "${root}/share/db/mssql.sh")"
+  printf '%s' "${body}" | grep -q 'BGB_DB_RESULT="failed"'
+  printf '%s' "${body}" | grep -q 'could not be queried'
+}

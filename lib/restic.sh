@@ -172,11 +172,37 @@ restic_exec_logged() {
     log "[dry-run] restic ${argv[*]}"
     return 0
   fi
+  # THE QUIESCE DEADLINE. While containers or services are frozen,
+  # JOB_QUIESCE_MAX_SECONDS caps how long they may stay that way. It used to be
+  # documented and never enforced - quiesce_check_deadline() had no callers - so
+  # a repository that kept retrying could hold a production database paused
+  # without limit. `timeout` is applied only while a quiesce is actually held,
+  # so dumps (which run before quiesce_begin) and every restore are unaffected.
+  #
+  # TERM first, KILL 30s later: restic removes its repository lock on TERM, and
+  # skipping straight to KILL would leave a lock nobody can clear.
+  local -a runner=()
+  if declare -F quiesce_remaining_seconds >/dev/null 2>&1 && have timeout; then
+    local _left
+    _left="$(quiesce_remaining_seconds)"
+    if [ -n "${_left}" ]; then
+      runner=(timeout --signal=TERM --kill-after=30 "${_left}")
+      debug "quiesce deadline: ${_left}s left of ${JOB_QUIESCE_MAX_SECONDS}s"
+    fi
+  fi
+
   debug "restic ${argv[*]}"
   set +e
-  "${BGB_RESTIC_BIN}" "${argv[@]}" 2>&1 | tee -a "${logfile}"
+  "${runner[@]}" "${BGB_RESTIC_BIN}" "${argv[@]}" 2>&1 | tee -a "${logfile}"
   rc="${PIPESTATUS[0]}" # NOT $? - that is tee's status
   set -e
+
+  # 124 is timeout(1)'s own "the deadline expired". Translate it, or the caller
+  # sees an exit code restic never produces and reports it as an unknown error.
+  if [ "${rc}" -eq 124 ] && [ "${#runner[@]}" -gt 0 ]; then
+    err "The quiesce window of ${JOB_QUIESCE_MAX_SECONDS}s expired - restic was stopped"
+    err "Service is being restored now. A missed backup beats an outage."
+  fi
   return "${rc}"
 }
 

@@ -80,16 +80,38 @@ db_load_engine() {
   return 0
 }
 
-# db_engine_module <engine> - which file implements this engine.
-# MariaDB and Percona are served by mysql.sh; the mapping lives here rather than
-# being hard-coded at every call site.
-db_engine_module() {
+# db_engine_canonical <name> - the engine an alias refers to.
+#
+# EVERY alias any module advertises must appear here. This table used to hold
+# only mariadb/percona and opensearch, while the modules declared thirteen more
+# through their db_<engine>_aliases() functions. The consequence was not a
+# missing feature but a silent one: a container carrying the documented
+# `backup.bauer-group.com/engine=postgresql` label loaded postgres.sh correctly
+# (the module lookup happened to be forgiving) and then looked for a function
+# called db_postgresql_dump, which does not exist. The target was skipped with a
+# warning, counted as neither attempted nor failed, and the run finished green
+# with that database absent from the backup.
+#
+# The module file is named after the canonical engine, so this is also the
+# module lookup. tests/unit/regressions.bats asserts that every alias every
+# module declares canonicalises back to that module - the table cannot drift
+# away from the modules without a test failing.
+db_engine_canonical() {
   case "$1" in
+    postgresql | pgsql | timescaledb) printf 'postgres' ;;
     mariadb | percona) printf 'mysql' ;;
-    opensearch) printf 'elasticsearch' ;;
+    mongo) printf 'mongodb' ;;
+    valkey | keydb) printf 'redis' ;;
+    influx | influxdb2) printf 'influxdb' ;;
+    ch | clickhouse-server) printf 'clickhouse' ;;
+    opensearch | elastic | es) printf 'elasticsearch' ;;
+    sqlserver | mssqlserver) printf 'mssql' ;;
+    sqlite3) printf 'sqlite' ;;
     *) printf '%s' "$1" ;;
   esac
 }
+
+db_engine_module() { db_engine_canonical "$1"; }
 
 # -----------------------------------------------------------------------------
 # Detection
@@ -133,11 +155,15 @@ db_detect() {
 # db_engine_enabled <engine> - is this engine in the job's JOB_DB_ENGINES list?
 db_engine_enabled() {
   local engine="$1" e
+  # Compare CANONICAL names on both sides. This used to special-case exactly one
+  # pair, mysql/mariadb, so an operator who wrote JOB_DB_ENGINES=( postgresql )
+  # or labelled a container engine=valkey had that target silently dropped from
+  # the plan - the same alias blindness as the dispatch, one step earlier.
+  local want
+  want="$(db_engine_canonical "${engine}")"
   for e in "${JOB_DB_ENGINES[@]:-}"; do
-    [ "${e}" = "${engine}" ] && return 0
-    # mariadb and mysql are interchangeable in the config for convenience.
-    { [ "${e}" = "mysql" ] && [ "${engine}" = "mariadb" ]; } && return 0
-    { [ "${e}" = "mariadb" ] && [ "${engine}" = "mysql" ]; } && return 0
+    [ -n "${e}" ] || continue
+    [ "$(db_engine_canonical "${e}")" = "${want}" ] && return 0
   done
   return 1
 }
@@ -209,19 +235,37 @@ db_dump_all() {
     IFS=$'\t' read -r c name engine tier <<<"${line}"
     [ -n "${c}" ] || continue
 
-    db_load_engine "${engine}" || {
-      warn "No engine module for '${engine}' (container ${name}) - skipping"
-      continue
-    }
+    # Canonicalise BEFORE building the function name. An alias such as
+    # "postgresql" or "mariadb" - both documented as valid values of the
+    # backup.bauer-group.com/engine label - loaded the right module and then
+    # looked for db_postgresql_dump, which does not exist.
+    local ceng
+    ceng="$(db_engine_canonical "${engine}")"
 
-    local fn="db_${engine}_dump"
-    if ! declare -F "${fn}" >/dev/null 2>&1; then
-      warn "Engine module '${engine}' provides no dump function - skipping ${name}"
+    # A target we were ASKED to dump and cannot is a FAILURE, not a skip. Both
+    # branches below used to `continue` before count was incremented, so the
+    # container contributed to neither the attempted nor the failed tally: the
+    # run reported "0 attempted, 0 failed" and exited 0 with that database
+    # missing from the backup. `skipped` is for a target we deliberately do not
+    # dump (a Redis used purely as a cache); this is not that.
+    count=$((count + 1))
+
+    if ! db_load_engine "${ceng}"; then
+      err "No engine module for '${engine}' (container ${name}) - NOT backed up"
+      failed=$((failed + 1))
+      worst="$(worst_rc "${worst}" "${EX_FAIL}")"
       continue
     fi
 
-    log "Dumping ${engine} from container '${name}' (tier=${tier})"
-    count=$((count + 1))
+    local fn="db_${ceng}_dump"
+    if ! declare -F "${fn}" >/dev/null 2>&1; then
+      err "Engine '${engine}' (module ${ceng}) provides no dump function - '${name}' was NOT backed up"
+      failed=$((failed + 1))
+      worst="$(worst_rc "${worst}" "${EX_FAIL}")"
+      continue
+    fi
+
+    log "Dumping ${ceng} from container '${name}' (tier=${tier})"
     rc=0
     db_result_reset
 
@@ -267,7 +311,7 @@ db_dump_all() {
       ok)
         debug "Dump of '${name}' succeeded"
         [ -n "${BGB_DB_LAST_SNAPSHOT}" ] && debug "snapshot ${BGB_DB_LAST_SNAPSHOT}"
-        db_record_counts "${c}" "${engine}" "${name}" "${job}" "${run_id}" || true
+        db_record_counts "${name:-${c}}" "${ceng}" "${name}" "${job}" "${run_id}" || true
         ;;
       skipped)
         log "Skipped '${name}': ${BGB_DB_RESULT_REASON:-no reason given}"
@@ -278,7 +322,7 @@ db_dump_all() {
         # swallowed: a snapshot whose consistency is unknown is exactly the
         # silent state this tool exists to eliminate.
         db_mark_degraded "${name} (${engine}): ${BGB_DB_RESULT_REASON:-consistency not guaranteed}"
-        db_record_counts "${c}" "${engine}" "${name}" "${job}" "${run_id}" || true
+        db_record_counts "${name:-${c}}" "${ceng}" "${name}" "${job}" "${run_id}" || true
         ;;
       *)
         err "Dump of '${name}' FAILED: ${BGB_DB_RESULT_REASON:-rc=${rc}}"
@@ -311,7 +355,13 @@ db_record_counts() {
   local c="$1" engine="$2" name="$3" job="$4" run_id="$5"
   [ "${JOB_DB_RECORD_COUNTS}" = "1" ] || return 0
 
-  local fn="db_${engine}_counts"
+  # Canonicalise here too: with an alias such as "postgresql" this looked for
+  # db_postgresql_counts, found nothing and returned silently - so verify had no
+  # row counts to compare a restored database against, and its restore test
+  # degraded to "the dump loads" without anyone being told.
+  local ceng fn
+  ceng="$(db_engine_canonical "${engine}")"
+  fn="db_${ceng}_counts"
   declare -F "${fn}" >/dev/null 2>&1 || return 0
 
   local counts

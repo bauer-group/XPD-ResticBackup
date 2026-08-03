@@ -128,12 +128,20 @@ backup_run_job() {
 
   log "=== job '${job}' (${JOB_MODE}) run ${run_id} ==="
 
-  # 1. Undo anything a previous run left frozen.
-  quiesce_recover_stale "${job}"
-
-  # 2. Locks. The repository lock serialises against forget/prune/check/copy.
+  # 1. Locks FIRST. The repository lock serialises against
+  #    forget/prune/check/copy; the job lock is what makes step 2 safe.
   lock_take_job "${job}" || return "${EX_LOCKED}"
   lock_take_repo || return "${EX_LOCKED}"
+
+  # 2. Undo anything a PREVIOUS run left frozen.
+  #
+  # This used to run BEFORE the locks, and the ordering was the bug: a second
+  # invocation of the same job would find the journal of the run that is still
+  # in progress, unpause its containers underneath it and delete its journal -
+  # so the first run then finished with no record of what it had frozen. The job
+  # lock is precisely the proof that no other run owns this journal, so the
+  # recovery has to happen behind it.
+  quiesce_recover_stale "${job}"
 
   # 3. Repository.
   repo_env_load
