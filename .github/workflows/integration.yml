@@ -3,56 +3,60 @@
 # =============================================================================
 # BAUER GROUP | https://github.com/bauer-group/XPD-ResticBackup
 #
-# What CI cannot answer: does the installer actually install, does restic
-# actually talk to an S3-compatible backend, and can a destroyed host be
-# rebuilt from nothing but a repository and a passphrase. This workflow runs
-# the throwaway MinIO rig from tests/rig/ and rehearses exactly that.
+# What CI cannot answer: does the installer actually install, does restic really
+# talk to an S3-compatible backend, may the backup identity delete repository
+# data, and can a destroyed host be rebuilt from nothing but a repository and a
+# passphrase. This workflow runs the throwaway BAUER GROUP MinIO rig from
+# tests/rig/ and rehearses exactly that - on EVERY push to main, not nightly.
 #
-# MATRIX ORDER IS LOAD-BEARING: 22.04 is listed FIRST because it is the floor -
-# bash 5.1 and systemd 249. GitHub starts matrix legs in declaration order, so
-# the oldest target reports first. A run that is green on 26.04 and red on
-# 22.04 is almost never a distro bug; it means someone used bash 5.2 syntax
-# (${var@U}, the new `wait -p` behaviour, ...) or a systemd directive that
-# 249 does not know. Read the 22.04 leg first, always.
+# EVERY SUITE, EVERY PUSH. docker-stack.sh and db-engines.sh used to be
+# reachable only through `make`, so the JOB_MODE=docker path and all eight
+# database engines were "proved" exactly as often as somebody remembered to
+# type the command. They are matrix legs here now.
+#
+# UBUNTU 26.04 ONLY, DELIBERATELY. A structural defect appears on every release,
+# so a three-distro e2e matrix mostly buys three copies of the same answer. The
+# one thing 26.04 cannot see is syntax that only exists from bash 5.2 onward
+# (${var@U}, the new `wait -p`): green here, dead on a 22.04 production host.
+# That gap is covered for ~20 seconds by the "bash 5.1 parse" job in ci.yml, not
+# by tripling this workflow's runtime.
+#
+# ONE FRESH RIG PER LEG. The suites assert exact snapshot counts against one
+# repository prefix, and restic leaves a lock behind when a run is interrupted.
+# Sharing a backend between suites makes them read each other's snapshots and
+# each other's debris, which produces failures that move around between runs.
+# Each matrix leg gets its own runner and therefore its own rig.
+#
+# NEVER PIPE THE SUITE. `docker compose run ... | tail` reports TAIL's exit
+# status, so a suite that failed every assertion looks green. Every invocation
+# below is bare, and its exit status is the step's.
 #
 # WHY NOT `services:` / job-level `container:`
-#   * The rig needs a ONE-SHOT init container: MinIO comes up empty, and a
-#     second container has to run `mc mb` plus the scoped access policy and
-#     then exit 0. GitHub's `services:` can only express long-running
-#     containers - it has no notion of a container that is supposed to finish,
-#     and it offers no ordering or depends_on between services.
+#   * The rig needs a ONE-SHOT init container: MinIO comes up empty and the
+#     declarative init has to run to completion before anything else starts.
+#     GitHub's `services:` has no notion of a container that is supposed to
+#     finish, and no ordering between services.
 #   * Job-level `container:` would run the steps INSIDE a container, which then
 #     needs the Docker socket to build the victim image - docker-in-docker for
 #     no benefit.
 #   Driving `docker compose` from the runner keeps one compose file that works
 #   identically on a developer laptop (`make integration`) and here.
 #
-# NO SECRETS. The rig credentials are throwaway literals inside the compose
-# file, allowlisted by name in .gitleaks.toml and asserted against by the
-# redaction regression test. Nothing here may ever be pointed at a real bucket.
+# NO SECRETS. The rig credentials are throwaway literals in the compose file,
+# allowlisted by name in .gitleaks.toml and asserted against by the redaction
+# regression test. Nothing here may ever be pointed at a real bucket.
 # =============================================================================
 
 name: 🧪 Integration
 
 on:
+  # No `paths:` filter. This workflow is the answer to "does main still work",
+  # and a change to a Makefile target, a workflow or a document can break the
+  # rig just as effectively as a change to lib/.
   push:
     branches: [main]
-    paths:
-      - 'bin/**'
-      - 'lib/**'
-      - 'share/**'
-      - 'tests/**'
-      - 'install.sh'
-      - '.github/workflows/integration.yml'
   pull_request:
     branches: [main]
-    paths:
-      - 'bin/**'
-      - 'lib/**'
-      - 'share/**'
-      - 'tests/**'
-      - 'install.sh'
-      - '.github/workflows/integration.yml'
   schedule:
     # 02:17 UTC daily. Off the hour on purpose: the top of the hour is when
     # every scheduled workflow on GitHub fires and queue time balloons.
@@ -66,31 +70,41 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  BGB_UBUNTU_TAG: '26.04'
+  COMPOSE_FILE: tests/rig/docker-compose.yml
+
 jobs:
-  rig:
-    name: 🧪 Ubuntu ${{ matrix.ubuntu }}
+  # ===========================================================================
+  # One leg per suite. Each brings up its own rig from scratch.
+  # ===========================================================================
+  e2e:
+    name: 🧪 ${{ matrix.name }}
     runs-on: ubuntu-latest
-    # Generous: a cold run pulls the Ubuntu base image, installs restic, seeds
-    # data, backs it up and restores it. Still bounded - a hung `restic unlock`
-    # or a compose wait that never settles must not burn a 6-hour job slot.
     timeout-minutes: 45
     strategy:
-      # Never fail-fast. If 24.04 breaks we still want to know whether 22.04 and
-      # 26.04 break the same way; "one leg cancelled the others" turns a
+      # Never fail-fast: if the docker leg breaks we still want to know whether
+      # maintenance broke the same way. "One leg cancelled the others" turns a
       # three-line answer into a bisect.
       fail-fast: false
       matrix:
-        ubuntu: ['22.04', '24.04', '26.04']
+        include:
+          - name: Installer
+            suite: installer.sh
+            service: victim
+          - name: Maintenance (check/verify/prune/copy)
+            suite: maintenance.sh
+            service: victim
+          - name: Docker stack
+            suite: docker-stack.sh
+            service: docker-victim
+          - name: Database engines
+            suite: db-engines.sh
+            service: docker-victim
 
     env:
-      # Consumed by tests/rig/docker-compose.yml, which passes it through to the
-      # victim/phoenix images as the UBUNTU_TAG build arg. Identical mechanism
-      # to `make integration UBUNTU=22.04`, so a failure here is reproducible
-      # locally with one variable.
-      BGB_UBUNTU_TAG: ${{ matrix.ubuntu }}
-      COMPOSE_FILE: tests/rig/docker-compose.yml
-      # Compose v2 reads these; keeping the project name distinct per leg stops
-      # two matrix legs from colliding if they ever land on the same runner.
+      # Distinct per leg so two legs can never collide if they ever land on the
+      # same self-hosted runner.
       COMPOSE_PROJECT_NAME: bgbrig${{ strategy.job-index }}
 
     steps:
@@ -103,32 +117,73 @@ jobs:
         run: |
           docker --version
           docker compose version
-          echo "victim/phoenix base image: ubuntu:${BGB_UBUNTU_TAG}"
+          echo "victim base image: ubuntu:${BGB_UBUNTU_TAG}"
 
-      - name: 🪣 Start MinIO rig
-        # NOT `docker compose up -d --wait minio minio-init`. --wait waits for a
-        # service to be RUNNING or HEALTHY, and a run-to-completion service can
-        # be neither: compose prints "container ...-minio-init-1 exited (0)" and
-        # returns 1 on a SUCCESSFUL init. Every integration run failed on that.
-        # up.sh waits for minio, then inspects the init container's exit code
-        # itself - and prints its log when it really did fail, which is the part
-        # --wait could never do.
+      - name: 🪣 Start the rig backend
+        # up.sh does what `docker compose up --wait` cannot: it waits for the
+        # run-to-completion init container, and then READS THE RESULT BACK off
+        # the server. The init container logs a failed policy in red but still
+        # exits 0, so its exit code alone would let a rig with no least-privilege
+        # policy report itself ready - and every permission assertion downstream
+        # would be vacuous.
         run: bash tests/rig/up.sh
 
-      - name: 🏗️ Build victim image
-        run: docker compose build victim
+      - name: 🏗️ Build ${{ matrix.service }}
+        run: docker compose build ${{ matrix.service }}
 
-      - name: 🧪 Installer end-to-end
-        # tests/e2e/installer.sh runs the real install.sh inside a clean Ubuntu
-        # container: fetch, verify restic, lay out /opt, /etc, systemd units,
-        # then `bg-backup doctor`. This is the only place the curl|bash path is
-        # exercised as an operator would actually experience it.
-        run: docker compose run --rm victim /opt/bgb/tests/e2e/installer.sh
+      - name: 🧪 ${{ matrix.suite }}
+        # Bare on purpose - see the header. No pipe, no `|| true`.
+        run: docker compose run --rm ${{ matrix.service }} /opt/bgb/tests/e2e/${{ matrix.suite }}
 
-      - name: 🏗️ Build phoenix image
-        run: docker compose build phoenix
+      - name: 📜 Collect rig logs
+        if: failure()
+        run: |
+          mkdir -p rig-logs
+          docker compose ps -a >rig-logs/compose-ps.txt 2>&1 || true
+          docker compose logs --no-color --timestamps >rig-logs/compose.log 2>&1 || true
 
-      - name: 🔥 DR rehearsal - seed and back up
+      - name: 📤 Upload rig logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rig-logs-${{ matrix.suite }}
+          path: rig-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: 🧹 Tear down rig
+        # `always()` and `-v`: a leaked MinIO volume on a self-hosted runner
+        # would carry a previous run's repository into the next one, and a
+        # rehearsal that restores yesterday's snapshot proves nothing.
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  # ===========================================================================
+  # The disaster-recovery rehearsal is a sequence across two hosts, not a single
+  # suite invocation, so it gets its own job rather than a matrix leg.
+  # ===========================================================================
+  dr:
+    name: 🔥 DR rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COMPOSE_PROJECT_NAME: bgbrigdr
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: 🪣 Start the rig backend
+        run: bash tests/rig/up.sh
+
+      - name: 🏗️ Build victim and phoenix
+        run: |
+          docker compose build victim
+          docker compose build phoenix
+
+      - name: 🌱 Seed and back up
         run: docker compose run --rm victim /opt/bgb/tests/e2e/dr-seed-and-backup.sh
 
       - name: 💥 Destroy the victim host
@@ -137,10 +192,9 @@ jobs:
         # repository in MinIO survives into the next step.
         run: docker compose rm -fsv victim
 
-      - name: 🚑 DR rehearsal - restore and assert
-        # phoenix is a bare host that has never seen the data. It gets the
-        # repository URL and the passphrase and nothing else, and must
-        # reconstruct the seeded tree byte for byte.
+      - name: 🚑 Restore onto a host that has never seen the data
+        # phoenix gets the repository URL and the passphrase and nothing else,
+        # and must reconstruct the seeded tree byte for byte.
         run: docker compose run --rm phoenix /opt/bgb/tests/e2e/dr-restore-and-assert.sh
 
       - name: 📜 Collect rig logs
@@ -154,35 +208,52 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: rig-logs-ubuntu-${{ matrix.ubuntu }}
+          name: rig-logs-dr
           path: rig-logs/
           retention-days: 7
           if-no-files-found: ignore
 
       - name: 🧹 Tear down rig
-        # `always()` and `-v`: a leaked MinIO volume on a self-hosted runner
-        # would carry a previous run's repository into the next one, and a
-        # rehearsal that restores yesterday's snapshot proves nothing.
         if: always()
         run: docker compose down -v --remove-orphans
 
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
   summary:
     name: 📊 Integration Summary
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [rig]
+    needs: [e2e, dr]
     if: always()
     steps:
       - name: 📊 Write job summary
         env:
-          RESULT: ${{ needs.rig.result }}
+          R_E2E: ${{ needs.e2e.result }}
+          R_DR: ${{ needs.dr.result }}
         run: |
+          mark() { case "$1" in success) echo "✅" ;; skipped) echo "⏭️" ;; *) echo "❌" ;; esac; }
           {
-            echo "## 🧪 Integration"
+            echo "## 🧪 Integration (Ubuntu ${BGB_UBUNTU_TAG}, real MinIO, real restic)"
             echo
-            echo "Matrix result (ubuntu 22.04 / 24.04 / 26.04): **${RESULT}**"
+            echo "| Gate | Result |"
+            echo "| --- | --- |"
+            echo "| 🧪 e2e suites (installer, maintenance, docker, databases) | $(mark "${R_E2E}") ${R_E2E} |"
+            echo "| 🔥 DR rehearsal | $(mark "${R_DR}") ${R_DR} |"
             echo
-            echo "> If 22.04 is the only red leg, suspect bash 5.2 syntax or a"
-            echo "> systemd directive newer than 249 before suspecting the rig."
+            echo "> Every suite ran against its own fresh rig. A green result here"
+            echo "> says nothing about bash 5.1 - that is the 'bash 5.1 parse' job"
+            echo "> in CI."
           } >>"${GITHUB_STEP_SUMMARY}"
-          [ "${RESULT}" = "success" ] || exit 1
+
+      - name: 🚦 Enforce aggregate result
+        env:
+          RESULTS: ${{ needs.e2e.result }} ${{ needs.dr.result }}
+        run: |
+          for r in ${RESULTS}; do
+            if [ "${r}" != "success" ]; then
+              echo "::error::An integration gate did not pass (${RESULTS})"
+              exit 1
+            fi
+          done
+          echo "All integration gates passed."

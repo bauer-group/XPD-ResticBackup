@@ -1,0 +1,168 @@
+{
+  "_readme": [
+    "Declarative rig backend for bg-backup, applied by the BAUER GROUP",
+    "minio-init container (ghcr.io/bauer-group/cs-minio/minio-init).",
+    "",
+    "THE INIT POLICY IS THE PRODUCTION POLICY. An over-broad test policy would",
+    "hide exactly the class of permission bug that only appears in production -",
+    "most obviously the DeleteObject-only-under-locks/ rule, without which restic",
+    "leaves a stale lock on every run.",
+    "",
+    "JSON HAS NO COMMENTS, so the rationale lives in _comment / _readme keys.",
+    "Both are IGNORED by the init container: tasks/02_policies.py reads only",
+    "'name' and 'statements', and an unknown top-level key matches no task's",
+    "CONFIG_KEY. Nothing here reaches MinIO except buckets, policies and users.",
+    "Never put a _comment INSIDE a statement - that object is sent to IAM",
+    "verbatim and an unknown key makes MinIO reject the whole policy.",
+    "",
+    "Placeholders written as a dollar sign followed by {NAME} are resolved from",
+    "the init container's environment, and an UNSET variable is a hard error",
+    "(main.py: resolve_env_vars raises), so a typo fails the rig instead of",
+    "silently creating a user whose name is the placeholder text.",
+    "",
+    "AND THAT RESOLVER IS NOT COMMENT-AWARE: resolve_config_values recurses over",
+    "every string in this file, these _readme lines included. Writing a literal",
+    "dollar-brace example in prose aborts the whole rig with",
+    "  Error loading config: Environment variable 'VAR' is not set",
+    "which is why the placeholder syntax is spelled out in words here.",
+    "",
+    "CAVEAT that up.sh exists to cover: tasks/02_policies.py logs a failed",
+    "'mc admin policy create' in red but does NOT raise, so process_config()",
+    "counts it as applied and the container still exits 0. Never treat this",
+    "container's exit code as proof that the policy is in place - up.sh",
+    "re-reads the attachment from the server and that check is load-bearing."
+  ],
+
+  "buckets": [
+    {
+      "name": "${BGB_IT_BUCKET}",
+      "region": "${BGB_IT_REGION}",
+      "policy": "private",
+      "versioning": false
+    }
+  ],
+
+  "policies": [
+    {
+      "name": "bgb-scoped",
+      "_comment": [
+        "Least privilege for ONE host's repository prefix, shaped exactly like",
+        "the production policy (one repository per host prefix in a shared",
+        "bucket).",
+        "",
+        "ONLY s3:ListBucket accepts an s3:prefix condition. GetBucketLocation",
+        "and ListBucketMultipartUploads are bucket-level operations that take no",
+        "prefix, and MinIO rejects the ENTIRE policy with",
+        "  unsupported condition keys '[s3:prefix]' used for action '<action>'",
+        "if either is grouped under the prefix condition. They therefore keep",
+        "their own, unconditioned statement - this split is not cosmetic.",
+        "",
+        "DeleteObject is granted ONLY under <prefix>/locks/. restic writes a lock",
+        "object on every run and removes it on exit: deny deletes outright and",
+        "every run leaves a stale lock behind, and by the third run the",
+        "repository needs an unlock that also cannot succeed. Granting delete",
+        "repository-wide would make the append-only premise a fiction."
+      ],
+      "statements": [
+        {
+          "Sid": "BucketLevel",
+          "Effect": "Allow",
+          "Action": ["s3:GetBucketLocation", "s3:ListBucketMultipartUploads"],
+          "Resource": ["arn:aws:s3:::${BGB_IT_BUCKET}"]
+        },
+        {
+          "Sid": "ListOwnPrefix",
+          "Effect": "Allow",
+          "Action": ["s3:ListBucket"],
+          "Resource": ["arn:aws:s3:::${BGB_IT_BUCKET}"],
+          "Condition": {
+            "StringLike": { "s3:prefix": ["${BGB_IT_PREFIX}/*"] }
+          }
+        },
+        {
+          "Sid": "ReadWriteOwnPrefix",
+          "Effect": "Allow",
+          "Action": [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts"
+          ],
+          "Resource": ["arn:aws:s3:::${BGB_IT_BUCKET}/${BGB_IT_PREFIX}/*"]
+        },
+        {
+          "Sid": "DeleteLocksOnly",
+          "Effect": "Allow",
+          "Action": ["s3:DeleteObject"],
+          "Resource": ["arn:aws:s3:::${BGB_IT_BUCKET}/${BGB_IT_PREFIX}/locks/*"]
+        }
+      ]
+    },
+
+    {
+      "name": "bgb-scoped-prune",
+      "_comment": [
+        "The SEPARATE PRUNE IDENTITY of ADR-0005. Backup runs as bgb-scoped and",
+        "cannot delete data; only this identity can, and only inside the same",
+        "prefix. Keeping it as its own MinIO user is what makes the maintenance",
+        "e2e able to prove the split rather than assert it in a document: the",
+        "backup user must FAIL to prune, and this user must succeed."
+      ],
+      "statements": [
+        {
+          "Sid": "BucketLevel",
+          "Effect": "Allow",
+          "Action": ["s3:GetBucketLocation", "s3:ListBucketMultipartUploads"],
+          "Resource": ["arn:aws:s3:::${BGB_IT_BUCKET}"]
+        },
+        {
+          "Sid": "ListOwnPrefix",
+          "Effect": "Allow",
+          "Action": ["s3:ListBucket"],
+          "Resource": ["arn:aws:s3:::${BGB_IT_BUCKET}"],
+          "Condition": {
+            "StringLike": { "s3:prefix": ["${BGB_IT_PREFIX}/*"] }
+          }
+        },
+        {
+          "Sid": "FullReadWriteDeleteOwnPrefix",
+          "Effect": "Allow",
+          "Action": [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts"
+          ],
+          "Resource": ["arn:aws:s3:::${BGB_IT_BUCKET}/${BGB_IT_PREFIX}/*"]
+        }
+      ]
+    }
+  ],
+
+  "users": [
+    {
+      "_comment": "The backup identity. Cannot delete anything but its own locks.",
+      "access_key": "${BGB_IT_ACCESS_KEY}",
+      "secret_key": "${BGB_IT_SECRET_KEY}",
+      "policies": ["bgb-scoped"]
+    },
+    {
+      "_comment": [
+        "The prune identity of ADR-0005. Never configured for backup jobs.",
+        "",
+        "There is deliberately NO third identity for the copy target. restic",
+        "takes its S3 credentials from one set of AWS_* variables, and",
+        "lib/retention.sh cmd_copy only overrides RESTIC_REPOSITORY and",
+        "RESTIC_FROM_REPOSITORY - so both sides of an S3-to-S3 copy authenticate",
+        "as the PRIMARY. Minting a scoped secondary user here would have created",
+        "a credential nothing could use, and widening the primary to reach the",
+        "copy would defeat the purpose of having one. The maintenance suite",
+        "therefore copies to the rest-server, whose auth travels in the URL."
+      ],
+      "access_key": "${BGB_IT_PRUNE_ACCESS_KEY}",
+      "secret_key": "${BGB_IT_PRUNE_SECRET_KEY}",
+      "policies": ["bgb-scoped-prune"]
+    }
+  ]
+}

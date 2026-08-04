@@ -13,7 +13,11 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 VERSION  := $(shell cat VERSION)
-UBUNTU   ?= 24.04
+# 26.04 matches .github/workflows/integration.yml, which runs this rig on that
+# release and only that release. Override for a one-off check on an older base
+# (`make integration UBUNTU=22.04`); the standing 5.1 cover is the `bash51` job
+# in ci.yml, which parses every script against bash 5.1 in twenty seconds.
+UBUNTU   ?= 26.04
 BATS     := tests/helper/bats-core/bin/bats
 COMPOSE  := BGB_UBUNTU_TAG=$(UBUNTU) docker compose -f tests/rig/docker-compose.yml
 SHELLSRC := $(shell git ls-files '*.sh' '*.bash' 2>/dev/null)
@@ -27,9 +31,9 @@ SHELLSRC := $(shell git ls-files '*.sh' '*.bash' 2>/dev/null)
 #            cross-module (BGB_DB_RESULT, JOB_*, BGB_DEFAULT_*).
 SHELLCHECK_EXCLUDE := SC1091,SC2034
 
-.PHONY: help version lint format format-check test test-unit test-config \
-        rig-up rig-down rig-logs integration docker-e2e db-engines dr-rehearse \
-        docs recovery-sheet submodules clean check-all
+.PHONY: help version lint format format-check test test-unit test-config bash51 \
+        rig-up rig-down rig-logs integration maintenance docker-e2e db-engines \
+        dr-rehearse e2e docs recovery-sheet submodules clean check-all
 
 help: ## Show this help
 	@printf '\n\033[1mXPD-ResticBackup\033[0m - bg-backup v$(VERSION)\n\n'
@@ -62,6 +66,15 @@ test-config: ## Validate the shipped example configuration
 	@# SOURCING path on a real host, not a lint of a candidate file.
 	bash bin/bg-backup.sh --config share/config/bg-backup.conf.example config validate --strict --no-perm-check
 
+bash51: ## Parse every shell file with bash 5.1 (the oldest supported)
+	@# Mirrors the `bash51` job in ci.yml. The e2e rig runs 26.04 only, so this
+	@# is the ONLY thing standing between a ${var@U} and a dead 22.04 host.
+	@mapfile -t files < <(git ls-files '*.sh' '*.bash'); \
+	docker run --rm -v "$(PWD):/src:ro" -w /src ubuntu:22.04 bash -c '\
+	  bash --version | head -1; rc=0; \
+	  for f in "$$@"; do bash -n "$$f" || { echo "not parseable by bash 5.1: $$f"; rc=1; }; done; \
+	  exit $$rc' _ "$${files[@]}"
+
 test: lint test-unit ## Hermetic gate: lint + unit tests (no Docker, no network)
 
 check-all: lint format-check test-unit test-config ## Everything CI runs in ci.yml
@@ -77,9 +90,17 @@ rig-down: ## Stop the rig and delete its volumes
 rig-logs: ## Tail rig logs
 	$(COMPOSE) logs -f --no-color
 
-integration: rig-up ## Install end to end in a clean Ubuntu container (UBUNTU=22.04|24.04|26.04)
+integration: rig-up ## Install end to end in a clean Ubuntu container
 	$(COMPOSE) build victim
 	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/installer.sh
+
+maintenance: rig-up ## check, verify, forget, prune, copy - and the ADR-0005 identity split
+	@# The one suite that proves the least-privilege claim rather than asserting
+	@# it: it authenticates as the BACKUP identity and demands that the backend
+	@# refuse the delete, then repeats it as the PRUNE identity and demands that
+	@# it succeed. Also covers JOB_MODE=config and the append-only copy target.
+	$(COMPOSE) build victim
+	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/maintenance.sh
 
 docker-e2e: rig-up ## JOB_MODE=docker end to end against a real daemon (privileged)
 	$(COMPOSE) build docker-victim
@@ -94,6 +115,24 @@ dr-rehearse: rig-up ## Full disaster-recovery rehearsal: seed, back up, destroy,
 	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/dr-seed-and-backup.sh
 	$(COMPOSE) rm -fsv victim
 	$(COMPOSE) run --rm phoenix /opt/bgb/tests/e2e/dr-restore-and-assert.sh
+
+# EACH SUITE GETS A FRESH RIG, hence the rig-down between them rather than one
+# rig-up at the top. The suites assert exact snapshot counts against a single
+# repository prefix, and an interrupted restic run leaves a lock behind; sharing
+# one backend makes them read each other's snapshots and each other's debris.
+# integration.yml gets this for free by putting each suite on its own runner.
+e2e: ## Every e2e suite in sequence, each against its own fresh rig
+	$(MAKE) rig-down || true
+	$(MAKE) integration
+	$(MAKE) rig-down
+	$(MAKE) maintenance
+	$(MAKE) rig-down
+	$(MAKE) docker-e2e
+	$(MAKE) rig-down
+	$(MAKE) db-engines
+	$(MAKE) rig-down
+	$(MAKE) dr-rehearse
+	$(MAKE) rig-down
 
 # --- Docs and helpers --------------------------------------------------------
 

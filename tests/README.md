@@ -18,9 +18,43 @@ tests/
 │   ├── json.bats         emit/escape, including the hyphen regression
 │   ├── retention.bats    forget scoping and both counting rails
 │   └── restic_args.bats  argv construction, no secret in argv, exit mapping
-├── rig/                  MinIO + rest-server + victim/phoenix containers
-└── e2e/                  installer and DR rehearsal
+├── rig/                  BAUER GROUP MinIO + rest-server + victim/phoenix
+│   ├── docker-compose.yml
+│   ├── minio-init.json   buckets, IAM policies and identities, declaratively
+│   └── up.sh             starts the backend AND verifies the init really took
+└── e2e/                  installer, maintenance, docker, databases, DR
+    ├── installer.sh      the curl|bash path on a bare host
+    ├── maintenance.sh    check/verify/forget/prune/copy + the ADR-0005 split
+    ├── docker-stack.sh   JOB_MODE=docker against a real daemon
+    ├── db-engines.sh     eight engines, dumped consistently
+    └── dr-*.sh           seed, destroy the host, restore onto a new one
 ```
+
+### The rig backend is the production MinIO stack
+
+`tests/rig/` runs `ghcr.io/bauer-group/cs-minio/{minio,minio-init}` — the same
+images the platform runs in production — and declares its buckets, IAM policies
+and users in [`minio-init.json`](rig/minio-init.json) instead of in shell. What
+gets exercised is therefore the deployment shape we actually ship.
+
+Two things about that container are load-bearing and easy to get wrong:
+
+* **Its exit code is not proof.** `tasks/02_policies.py` logs a failed
+  `mc admin policy create` in red and returns normally, so the container exits
+  `0` with no policy in place. [`up.sh`](rig/up.sh) reads the users and their
+  attached policies back off the server afterwards. Without that check, every
+  least-privilege assertion in every suite would be measuring an account with
+  whatever permissions it happened to have.
+* **Its `${...}` resolver is not comment-aware.** It walks every string in the
+  JSON, including the `_readme` and `_comment` keys, so a dollar-brace example
+  written in prose aborts the whole rig.
+
+### Each suite gets its own rig
+
+The suites assert exact snapshot counts against one repository prefix, and an
+interrupted restic run leaves a lock behind. `make e2e` therefore tears the rig
+down between suites; `integration.yml` gets the same isolation for free by
+putting each suite on its own runner.
 
 ## What is deliberately not tested
 

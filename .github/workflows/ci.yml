@@ -124,6 +124,44 @@ jobs:
             -i 2 -ci -bn -d "${files[@]}"
 
   # ===========================================================================
+  # Oldest-bash compatibility
+  # ===========================================================================
+
+  bash51:
+    name: 🐚 bash 5.1 parse
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+
+      # The e2e rig runs Ubuntu 26.04 ONLY - a deliberate choice, because a
+      # structural defect shows up on every release and three distro legs mostly
+      # buy three copies of the same answer. The single thing 26.04 cannot see is
+      # syntax that did not exist before bash 5.2: ${var@U}, the new `wait -p`,
+      # and friends. Such a construct is green on every modern runner and dies
+      # instantly on a 22.04 production host, whose bash is 5.1.
+      #
+      # `bash -n` PARSES without executing, so this needs no rig, no repository
+      # and no privileges - it is the cheapest possible cover for the one gap the
+      # integration matrix deliberately does not cover. It cannot catch a 5.2-only
+      # BUILTIN used at runtime, only 5.2-only SYNTAX; that limit is the price of
+      # twenty seconds.
+      - name: 🐚 Parse every tracked shell file with bash 5.1
+        run: |
+          mapfile -t files < <(git ls-files '*.sh' '*.bash')
+          printf 'checking %d file(s) against bash 5.1\n' "${#files[@]}"
+          docker run --rm -v "${PWD}:/src:ro" -w /src ubuntu:22.04 \
+            bash -c '
+              bash --version | head -1
+              rc=0
+              for f in "$@"; do
+                bash -n "$f" || { echo "::error file=$f::not parseable by bash 5.1"; rc=1; }
+              done
+              exit $rc
+            ' _ "${files[@]}"
+
+  # ===========================================================================
   # Tests
   # ===========================================================================
 
@@ -164,7 +202,7 @@ jobs:
     name: 📊 CI Summary
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [validate-scripts, validate-workflows, format, unit]
+    needs: [validate-scripts, validate-workflows, format, bash51, unit]
     # always() so the summary is written even when a gate failed - the table is
     # most useful precisely then. The explicit result check below is what turns
     # this into a single required status check for branch protection; without it
@@ -176,6 +214,7 @@ jobs:
           R_SCRIPTS: ${{ needs.validate-scripts.result }}
           R_WORKFLOWS: ${{ needs.validate-workflows.result }}
           R_FORMAT: ${{ needs.format.result }}
+          R_BASH51: ${{ needs.bash51.result }}
           R_UNIT: ${{ needs.unit.result }}
           FILES_CHECKED: ${{ needs.validate-scripts.outputs.files-checked }}
           ISSUES_FOUND: ${{ needs.validate-scripts.outputs.issues-found }}
@@ -189,12 +228,14 @@ jobs:
             echo "| 🔍 ShellCheck | $(mark "${R_SCRIPTS}") ${R_SCRIPTS} |"
             echo "| ⚙️ Workflow lint | $(mark "${R_WORKFLOWS}") ${R_WORKFLOWS} |"
             echo "| 🎨 shfmt | $(mark "${R_FORMAT}") ${R_FORMAT} |"
+            echo "| 🐚 bash 5.1 parse | $(mark "${R_BASH51}") ${R_BASH51} |"
             echo "| 🧪 Unit tests | $(mark "${R_UNIT}") ${R_UNIT} |"
             echo
             echo "Shell files checked: \`${FILES_CHECKED:-n/a}\` · issues found: \`${ISSUES_FOUND:-n/a}\`"
             echo
             echo "> This gate is hermetic. A green result says nothing about a real"
-            echo "> repository backend or about Ubuntu 22.04 - see 🧪 Integration."
+            echo "> repository backend - see 🧪 Integration, which runs every e2e"
+            echo "> suite on Ubuntu 26.04 on every push to main."
           } >>"${GITHUB_STEP_SUMMARY}"
 
       - name: 🚦 Enforce aggregate result

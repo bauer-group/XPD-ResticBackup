@@ -337,7 +337,28 @@ rm -f /etc/bg-backup/conf.d/60-faildump.conf \
 sect "10. no secret appears in doctor output"
 
 # The redaction regression test, in CI rather than in a document.
+#
+# `|| true` IS STILL CORRECT HERE - doctor legitimately exits non-zero on this
+# rig, because the repository prefix is victim.rig.invalid while the container's
+# hostname is a random id, and doctor is right to call that out. What was WRONG
+# was swallowing the status and then grepping the log with no evidence that
+# doctor had produced one.
+#
+# It had not. doctor aborted on its first check with "BGB_RESTIC_BIN: unbound
+# variable", so /tmp/doctor.log was effectively empty - and an empty file
+# contains no secrets, so both assertions below passed while verifying nothing.
+# That is how a completely dead command survived every release.
 bg-backup doctor >/tmp/doctor.log 2>&1 || true
+
+! grep -qE 'unbound variable|command not found' /tmp/doctor.log
+ck $? "doctor ran instead of aborting on its own first check"
+
+# It must have got far enough to reach the repository, which is the section that
+# would actually print a credential if redaction were broken. Grepping a log
+# that stops before that point proves nothing about redaction.
+grep -q 'Repository' /tmp/doctor.log
+ck $? "doctor reached the repository section, where a secret could leak"
+
 ! grep -q "${BGB_IT_SECRET_KEY}" /tmp/doctor.log
 ck $? "the S3 secret does not appear in doctor output"
 ! grep -q "${BGB_IT_RESTIC_PASSWORD}" /tmp/doctor.log

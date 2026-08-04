@@ -1,17 +1,26 @@
 # =============================================================================
 # bg-backup integration rig
 # =============================================================================
-#   make rig-up            start MinIO and mint the scoped user
+#   make rig-up            start MinIO and apply the declarative init config
 #   make integration       run the installer end to end in a clean Ubuntu
 #   make dr-rehearse       seed, back up, destroy, restore, assert
+#
+# THE BACKEND IS THE BAUER GROUP MinIO STACK. Server and the one-shot init
+# container are the same images the platform runs in production
+# (ghcr.io/bauer-group/cs-minio/*), and the rig's buckets, IAM policies and
+# users are declared in tests/rig/minio-init.json rather than in shell here.
+# That is the point: what gets exercised is the deployment shape we actually
+# ship, not a hand-rolled approximation of it that is free to drift.
 #
 # PORT 9800, NOT 9000. A rig that steals a developer's default MinIO port is a
 # rig nobody starts twice.
 #
-# THE INIT POLICY IS THE PRODUCTION POLICY. An over-broad test policy would hide
-# exactly the class of permission bug that only appears in production - most
-# obviously the DeleteObject-only-under-locks/ rule, without which restic leaves
-# a stale lock on every run.
+# EXIT 0 FROM minio-init IS NOT PROOF. Its policy task logs a failed
+# `mc admin policy create` in red but does not raise, so the container reports
+# success with no policy in place. tests/rig/up.sh re-reads the attachment from
+# the server afterwards; that check is what makes the least-privilege premise
+# true rather than assumed. Do not drop it, and do not replace up.sh with
+# `docker compose up --wait`.
 #
 # Credentials here are throwaway literals, allowlisted BY NAME in .gitleaks.toml
 # so the scanner stays useful everywhere else.
@@ -26,17 +35,52 @@ x-throwaway: &throwaway
   MINIO_ROOT_USER: bgb-rig-root
   MINIO_ROOT_PASSWORD: bgb-rig-root-secret
 
+# Required by the init image's BUILT-IN default config, which main.py loads
+# UNCONDITIONALLY before ours - leave these unset and the container aborts with
+# "Environment variable 'CONSOLE_USER' is not set" before it reaches a single
+# line of tests/rig/minio-init.json.
+#
+# That default mints an administrator (admin:* + s3:*). It is deliberately NOT
+# part of *identities below and therefore never reaches a victim container: a
+# host that could authenticate as this user would satisfy every permission
+# assertion in every suite no matter how wrong the scoped policy was. The rig
+# already has one all-powerful identity in the root account; it does not get a
+# second one with a shorter name.
+x-console-admin: &console-admin
+  CONSOLE_USER: bgb-rig-console
+  CONSOLE_PASSWORD: bgb-rig-console-secret
+
+# Every identity the rig hands to a victim container. TWO, not one, because
+# ADR-0005 splits backup from prune: the backup identity may not delete anything
+# outside its locks/ prefix, and only the prune identity may. One all-powerful
+# test credential would make both of those assertions vacuous.
+#
+# There is no third identity for the copy target - see the note in
+# minio-init.json: restic authenticates both sides of an S3-to-S3 copy with the
+# same AWS_* variables, so the maintenance suite copies to the rest-server.
+x-identities: &identities
+  BGB_IT_BUCKET: ${BGB_IT_BUCKET:-bgb-it}
+  BGB_IT_REGION: ${BGB_IT_REGION:-eu-north1}
+  BGB_IT_PREFIX: ${BGB_IT_PREFIX:-victim.rig.invalid}
+  BGB_IT_ACCESS_KEY: ${BGB_IT_ACCESS_KEY:-bgb-it-ci-user}
+  BGB_IT_SECRET_KEY: ${BGB_IT_SECRET_KEY:-bgb-it-ci-throwaway-secret}
+  BGB_IT_PRUNE_ACCESS_KEY: ${BGB_IT_PRUNE_ACCESS_KEY:-bgb-it-ci-prune}
+  BGB_IT_PRUNE_SECRET_KEY: ${BGB_IT_PRUNE_SECRET_KEY:-bgb-it-ci-throwaway-prune-secret}
+
 services:
 
   minio:
-    image: minio/minio:latest
-    command: server --address ":9000" --console-address ":9001" /data
+    image: ${BGB_MINIO_IMAGE:-ghcr.io/bauer-group/cs-minio/minio}:${BGB_MINIO_VERSION:-latest}
     environment:
       <<: *throwaway
       MINIO_REGION_NAME: ${BGB_IT_REGION:-eu-north1}
       MINIO_BROWSER: "off"
     ports:
       - "${BGB_RIG_API_PORT:-9800}:9000"
+    # The image ships a HEALTHCHECK, but at a 30s interval with a 30s start
+    # period - sane for a long-lived deployment, and close to a minute of dead
+    # time on every CI run. The probe itself is the image's; only the timing is
+    # overridden, and only for the rig.
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 2s
@@ -47,94 +91,40 @@ services:
       - minio_data:/data
     networks: [rig]
 
-  # One-shot. This is why the workflow drives docker compose rather than using
-  # GitHub Actions `services:`, which cannot express a container that must run
-  # to completion before the others start.
+  # One-shot, declarative, idempotent. This is why the workflow drives docker
+  # compose rather than using GitHub Actions `services:`, which cannot express a
+  # container that must run to completion before the others start.
+  #
+  # Buckets, policies and users come from tests/rig/minio-init.json. Secrets are
+  # injected as ${VAR} placeholders resolved from this environment - an unset
+  # variable is a hard error inside the container, so a typo fails the rig
+  # instead of silently creating a user literally named '${BGB_IT_ACCESS_KEY}'.
   minio-init:
-    image: minio/mc:latest
+    image: ${BGB_MINIO_INIT_IMAGE:-ghcr.io/bauer-group/cs-minio/minio-init}:${BGB_MINIO_INIT_VERSION:-latest}
     depends_on:
       minio: {condition: service_healthy}
     restart: "no"
     environment:
-      <<: *throwaway
-      BGB_IT_BUCKET: ${BGB_IT_BUCKET:-bgb-it}
-      BGB_IT_ACCESS_KEY: ${BGB_IT_ACCESS_KEY:-bgb-it-ci-user}
-      BGB_IT_SECRET_KEY: ${BGB_IT_SECRET_KEY:-bgb-it-ci-throwaway-secret}
-      BGB_IT_PREFIX: ${BGB_IT_PREFIX:-victim.rig.invalid}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -e
-        mc alias set rig http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
-        mc mb --ignore-existing "rig/$${BGB_IT_BUCKET}"
-
-        # The production policy, verbatim in shape:
-        #   location - bucket-level, NO prefix condition (see below)
-        #   list     - only this host's prefix
-        #   rw       - only this host's prefix
-        #   delete   - ONLY under <prefix>/locks/
-        #
-        # restic writes a lock object on every run and removes it on exit. Deny
-        # deletes outright and every run leaves a stale lock behind; by the third
-        # run the repository needs an unlock that also cannot succeed.
-        #
-        # ONLY s3:ListBucket accepts an s3:prefix condition. GetBucketLocation
-        # and ListBucketMultipartUploads are bucket-level operations that take
-        # no prefix, and MinIO rejects the ENTIRE policy with
-        #   unsupported condition keys '[s3:prefix]' used for action '<action>'
-        # if either is grouped under the prefix condition. They therefore live in
-        # their own, unconditioned statement.
-        cat >/tmp/policy.json <<POLICY
-        {
-          "Version": "2012-10-17",
-          "Statement": [
-            { "Sid": "BucketLevel",
-              "Effect": "Allow",
-              "Action": ["s3:GetBucketLocation","s3:ListBucketMultipartUploads"],
-              "Resource": ["arn:aws:s3:::$${BGB_IT_BUCKET}"] },
-            { "Sid": "ListOwnPrefix",
-              "Effect": "Allow",
-              "Action": ["s3:ListBucket"],
-              "Resource": ["arn:aws:s3:::$${BGB_IT_BUCKET}"],
-              "Condition": {"StringLike":{"s3:prefix":["$${BGB_IT_PREFIX}/*"]}} },
-            { "Sid": "ReadWriteOwnPrefix",
-              "Effect": "Allow",
-              "Action": ["s3:GetObject","s3:PutObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],
-              "Resource": ["arn:aws:s3:::$${BGB_IT_BUCKET}/$${BGB_IT_PREFIX}/*"] },
-            { "Sid": "DeleteLocksOnly",
-              "Effect": "Allow",
-              "Action": ["s3:DeleteObject"],
-              "Resource": ["arn:aws:s3:::$${BGB_IT_BUCKET}/$${BGB_IT_PREFIX}/locks/*"] }
-          ]
-        }
-        POLICY
-
-        # NO `|| true` on any of these. An earlier revision swallowed the policy
-        # error, attached a non-existent policy, printed "rig ready" and handed
-        # the tests an account with DEFAULT permissions - so the least-privilege
-        # premise silently did not apply and every permission assertion was
-        # vacuous.
-        mc admin policy create rig bgb-scoped /tmp/policy.json
-        mc admin user add rig "$${BGB_IT_ACCESS_KEY}" "$${BGB_IT_SECRET_KEY}"
-        mc admin policy attach rig bgb-scoped --user "$${BGB_IT_ACCESS_KEY}"
-
-        # Prove the attachment took, rather than trusting the exit code.
-        # `case` rather than grep: the mc image is minimal and has no grep, which
-        # is itself worth knowing - a verification step that cannot run is a
-        # verification step that silently does not verify.
-        info="$(mc admin user info rig "$${BGB_IT_ACCESS_KEY}")"
-        case "$${info}" in
-          *bgb-scoped*) : ;;
-          *) echo "FATAL: policy bgb-scoped is not attached to $${BGB_IT_ACCESS_KEY}" >&2
-             echo "$${info}" >&2
-             exit 1 ;;
-        esac
-        echo "rig ready: bucket=$${BGB_IT_BUCKET} prefix=$${BGB_IT_PREFIX} policy=bgb-scoped"
+      <<: [*throwaway, *console-admin, *identities]
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_WAIT_TIMEOUT: ${BGB_RIG_TIMEOUT:-120}
+      MINIO_INIT_CONFIG: /app/config/init.json
+    volumes:
+      - ./minio-init.json:/app/config/init.json:ro
     networks: [rig]
 
   # A second backend so the append-only path is exercised rather than only
   # documented. rest-server refuses DELETE except on locks, which is the
-  # strongest ransomware control available to restic today.
+  # strongest ransomware control available to restic today. The maintenance
+  # suite reaches it as rest:http://rest-server:8000/<repo>/ and uses two paths:
+  # one as the `copy` destination, one to prove that a delete is refused.
+  #
+  # NO --create-repo here, however plausible the name: this image rejects the
+  # flag outright ("error: unknown flag: --create-repo") and the container then
+  # exits 1 at startup, which surfaces much later as restic being unable to
+  # resolve the host. Repository creation needs no server flag - `restic init`
+  # requests it with ?create=true, and append-only permits it because creating a
+  # repository only ever adds objects.
   rest-server:
     image: restic/rest-server:latest
     environment:
@@ -150,16 +140,13 @@ services:
       context: ../..
       dockerfile: tests/rig/Dockerfile.victim
       args:
-        UBUNTU_TAG: ${BGB_UBUNTU_TAG:-24.04}
+        UBUNTU_TAG: ${BGB_UBUNTU_TAG:-26.04}
     depends_on:
       minio-init: {condition: service_completed_successfully}
     environment: &rig_env
+      <<: *identities
       BGB_IT_ENDPOINT: http://minio:9000
-      BGB_IT_BUCKET: ${BGB_IT_BUCKET:-bgb-it}
-      BGB_IT_PREFIX: ${BGB_IT_PREFIX:-victim.rig.invalid}
-      BGB_IT_REGION: ${BGB_IT_REGION:-eu-north1}
-      BGB_IT_ACCESS_KEY: ${BGB_IT_ACCESS_KEY:-bgb-it-ci-user}
-      BGB_IT_SECRET_KEY: ${BGB_IT_SECRET_KEY:-bgb-it-ci-throwaway-secret}
+      BGB_IT_REST_ENDPOINT: http://rest-server:8000
       BGB_IT_RESTIC_PASSWORD: ${BGB_IT_RESTIC_PASSWORD:-bgb-it-ci-throwaway-repo-passphrase}
     volumes:
       - dr_evidence:/evidence
@@ -174,7 +161,7 @@ services:
       context: ../..
       dockerfile: tests/rig/Dockerfile.docker-victim
       args:
-        UBUNTU_TAG: ${BGB_UBUNTU_TAG:-24.04}
+        UBUNTU_TAG: ${BGB_UBUNTU_TAG:-26.04}
     depends_on:
       minio-init: {condition: service_completed_successfully}
     privileged: true
@@ -192,7 +179,7 @@ services:
       context: ../..
       dockerfile: tests/rig/Dockerfile.phoenix
       args:
-        UBUNTU_TAG: ${BGB_UBUNTU_TAG:-24.04}
+        UBUNTU_TAG: ${BGB_UBUNTU_TAG:-26.04}
     environment: *rig_env
     volumes:
       - dr_evidence:/evidence
