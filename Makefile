@@ -32,8 +32,8 @@ SHELLSRC := $(shell git ls-files '*.sh' '*.bash' 2>/dev/null)
 SHELLCHECK_EXCLUDE := SC1091,SC2034
 
 .PHONY: help version lint format format-check test test-unit test-config bash51 \
-        rig-up rig-down rig-logs integration maintenance docker-e2e db-engines \
-        dr-rehearse e2e docs recovery-sheet submodules clean check-all
+        rig-up rig-down rig-logs integration maintenance recovery docker-e2e \
+        db-engines dr-rehearse e2e docs recovery-sheet submodules clean check-all
 
 help: ## Show this help
 	@printf '\n\033[1mXPD-ResticBackup\033[0m - bg-backup v$(VERSION)\n\n'
@@ -102,6 +102,13 @@ maintenance: rig-up ## check, verify, forget, prune, copy - and the ADR-0005 ide
 	$(COMPOSE) build victim
 	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/maintenance.sh
 
+recovery: rig-up ## restore preview/system and dr plan/run/verify
+	@# Half of what this asserts is INERTNESS: preview must write nothing,
+	@# `dr plan` must write nothing, `dr run --dry-run` must change nothing.
+	@# Each is fingerprinted around rather than merely checked for exit 0.
+	$(COMPOSE) build victim
+	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/recovery.sh
+
 docker-e2e: rig-up ## JOB_MODE=docker end to end against a real daemon (privileged)
 	$(COMPOSE) build docker-victim
 	$(COMPOSE) run --rm docker-victim /opt/bgb/tests/e2e/docker-stack.sh
@@ -126,6 +133,8 @@ e2e: ## Every e2e suite in sequence, each against its own fresh rig
 	$(MAKE) integration
 	$(MAKE) rig-down
 	$(MAKE) maintenance
+	$(MAKE) rig-down
+	$(MAKE) recovery
 	$(MAKE) rig-down
 	$(MAKE) docker-e2e
 	$(MAKE) rig-down

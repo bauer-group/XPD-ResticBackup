@@ -12,7 +12,11 @@
 # EVERY SUITE, EVERY PUSH. docker-stack.sh and db-engines.sh used to be
 # reachable only through `make`, so the JOB_MODE=docker path and all eight
 # database engines were "proved" exactly as often as somebody remembered to
-# type the command. They are matrix legs here now.
+# type the command. They are matrix legs here now, alongside two suites that
+# did not exist at all: maintenance.sh (check/verify/forget/prune/copy and the
+# ADR-0005 identity split) and recovery.sh (restore preview, restore system,
+# dr plan/run/verify - the commands an operator reaches for on the worst day of
+# the year, none of which had ever been executed by CI).
 #
 # UBUNTU 26.04 ONLY, DELIBERATELY. A structural defect appears on every release,
 # so a three-distro e2e matrix mostly buys three copies of the same answer. The
@@ -94,6 +98,9 @@ jobs:
             service: victim
           - name: Maintenance (check/verify/prune/copy)
             suite: maintenance.sh
+            service: victim
+          - name: Recovery (preview/restore system/dr plan)
+            suite: recovery.sh
             service: victim
           - name: Docker stack
             suite: docker-stack.sh

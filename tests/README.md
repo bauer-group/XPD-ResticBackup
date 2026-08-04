@@ -22,13 +22,25 @@ tests/
 │   ├── docker-compose.yml
 │   ├── minio-init.json   buckets, IAM policies and identities, declaratively
 │   └── up.sh             starts the backend AND verifies the init really took
-└── e2e/                  installer, maintenance, docker, databases, DR
+└── e2e/                  installer, maintenance, recovery, docker, DBs, DR
     ├── installer.sh      the curl|bash path on a bare host
     ├── maintenance.sh    check/verify/forget/prune/copy + the ADR-0005 split
+    ├── recovery.sh       restore preview/system + dr plan/run/verify
     ├── docker-stack.sh   JOB_MODE=docker against a real daemon
     ├── db-engines.sh     eight engines, dumped consistently
     └── dr-*.sh           seed, destroy the host, restore onto a new one
 ```
+
+### Proving that a command does nothing
+
+`recovery.sh` is mostly about inertness — `restore preview` must write nothing,
+`dr plan` must write nothing, `dr run --dry-run` must change nothing. "Exits 0"
+proves none of that, so the suite fingerprints `/srv/payload` and
+`/etc/bg-backup` by name, size and mtime around each call and compares. That
+matters because preview already shipped one catastrophic failure of exactly this
+kind: it set `BGB_RESTORE_PREVIEW=1` and re-dispatched, but only
+`restore_path_cmd` ever read the flag, so `preview volume`, `preview project`,
+`preview db` and `preview system` performed the real operation.
 
 ### The rig backend is the production MinIO stack
 
