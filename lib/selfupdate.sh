@@ -17,7 +17,13 @@ _BGB_SELFUPDATE_SOURCED=1
 : "${BGB_REPO_SLUG:=bauer-group/XPD-ResticBackup}"
 
 cmd_self_update() {
-  local check_only=0 want="" restic_only=0 rollback=0 channel="${BGB_UPDATE_CHANNEL}"
+  # `channel` is NOT initialised from BGB_UPDATE_CHANNEL here: that default is
+  # created by config_load() below, so under `set -u` this line aborted the
+  # command outright:
+  #     lib/selfupdate.sh: line 20: BGB_UPDATE_CHANNEL: unbound variable
+  # The configured default is applied after config_load(), so --channel still
+  # wins over it.
+  local check_only=0 want="" restic_only=0 rollback=0 channel=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --check)
@@ -54,6 +60,8 @@ cmd_self_update() {
 
   require_root
   config_load
+
+  [ -n "${channel}" ] || channel="${BGB_UPDATE_CHANNEL}"
 
   [ "${rollback}" -eq 1 ] && {
     selfupdate_rollback

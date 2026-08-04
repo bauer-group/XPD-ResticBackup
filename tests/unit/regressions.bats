@@ -1303,3 +1303,202 @@ _bgb_stdin_argv() {
   # And it must warn about the string form rather than merely omitting it.
   grep -q 'glob' "${f}"
 }
+
+# -----------------------------------------------------------------------------
+# BUG 18: four commands aborted on an unbound variable and could never run
+# -----------------------------------------------------------------------------
+# cmd_check, cmd_prune and cmd_self_update each initialised a local from a
+# default that config_load() creates - in the local declaration, which runs
+# BEFORE config_load() is called. Under `set -euo pipefail` that is not a
+# fallback to empty, it is an immediate abort:
+#
+#     lib/verify.sh: line 31: BGB_CHECK_READ_DATA_SUBSET: unbound variable
+#     lib/retention.sh: line 220: BGB_PRUNE_MAX_UNUSED: unbound variable
+#     lib/selfupdate.sh: line 20: BGB_UPDATE_CHANNEL: unbound variable
+#
+# So `bg-backup check` and `bg-backup prune` had never worked on any host - and
+# they are the two commands that run unattended on a systemd timer.
+@test "regression: no command reads a config_defaults value before it exists" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+
+  # The authoritative list, read out of the function that creates them, so a
+  # newly added default is covered without touching this test.
+  local vars
+  vars="$(awk '/^config_defaults\(\)/,/^}/' "${root}/lib/config.sh" \
+    | grep -oE '\$\{BGB_[A-Z0-9_]+:=' | sed 's/^\${//; s/:=$//' | sort -u)"
+  [ -n "${vars}" ]
+
+  # Anything that reaches config_load counts as having loaded it. query_prepare
+  # is the one indirection in the codebase (config_load + repo_env_load +
+  # restic_require); listing it here rather than modelling the call graph keeps
+  # this test precise, and a new wrapper simply shows up as a failure to read.
+  local loaders='config_load|config_defaults|query_prepare'
+
+  local offenders="" f
+  for f in "${root}"/lib/*.sh; do
+    offenders+="$(awk -v vars="${vars}" -v loaders="${loaders}" '
+      BEGIN { n = split(vars, a, "\n") }
+      /^cmd_[a-z_]+\(\)/            { fn = $1; seen = 0; next }
+      fn && $0 ~ loaders            { seen = 1 }
+      fn && !seen && /^[[:space:]]*local / {
+        for (i = 1; i <= n; i++)
+          if (a[i] != "" && index($0, "${" a[i] "}"))
+            printf "  %s:%d  %s reads %s before config_load\n", FILENAME, NR, fn, a[i]
+      }
+      /^}/                          { fn = "" }
+    ' "${f}")"
+  done
+
+  [ -z "${offenders}" ] || {
+    printf 'a command would abort under set -u before it parsed a flag:\n%s\n' "${offenders}"
+    false
+  }
+}
+
+# -----------------------------------------------------------------------------
+# BUG 19: doctor died on its own first check
+# -----------------------------------------------------------------------------
+# doctor deliberately never calls config_load - it has to work on a host whose
+# configuration is broken, unreadable or absent. But it still READS the settings
+# that configuration would have supplied, and with no defaults applied the first
+# one killed the command:
+#
+#     lib/doctor.sh: line 147: BGB_RESTIC_BIN: unbound variable
+#
+# The installer e2e ran doctor with `|| true` and then asserted that no secret
+# appeared in its output. An empty log contains no secrets, so both redaction
+# assertions passed while checking nothing at all.
+@test "regression: doctor applies the built-in defaults without loading config" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  # Comments stripped first: this very function carries a comment reading
+  # "config_defaults, NOT config_load", and grepping the raw body made the
+  # assertion below fail on the explanation of why it holds.
+  local body
+  body="$(awk '/^cmd_doctor\(\)/,/^}/' "${root}/lib/doctor.sh" | sed 's/#.*//')"
+  [ -n "${body}" ]
+
+  # It must apply defaults ...
+  grep -q 'config_defaults' <<<"${body}"
+  # ... and it must still NOT source the host's configuration, which is the
+  # whole reason it can be run on a broken machine.
+  ! grep -qE '(^|[^_])config_load\b' <<<"${body}"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 20: check reported "another instance holds the lock" for a missing module
+# -----------------------------------------------------------------------------
+# The check|verify dispatch group never sourced lock.sh, so cmd_check's
+# `lock_take_repo || return "${EX_LOCKED}"` turned a "command not found" (127)
+# into exit 5. Every `bg-backup check` therefore claimed a concurrent run held
+# the repository lock - which on a weekly timer reads as a scheduling overlap,
+# not as a command that cannot execute at all. Same group, same class: verify's
+# database canary calls db_load_engine, and db.sh was missing too.
+@test "regression: every dispatch group sources the modules its code calls" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  local disp="${root}/bin/bg-backup.sh"
+
+  # index(), not a regex: the branch labels contain '|' and ')', and escaping
+  # them for awk turns the intended literal into an alternation that matches far
+  # more than the branch being asked for.
+  branch_for() { awk -v lbl="$1" 'index($0, lbl) == 1, /;;/' "${disp}"; }
+
+  # check | verify -> lock.sh (lock_take_repo) and db.sh (db_load_engine)
+  local cv; cv="$(branch_for '    check | verify)')"
+  [ -n "${cv}" ]
+  grep -q 'lock_take_repo' "${root}/lib/verify.sh"
+  grep -q 'lib_source lock.sh' <<<"${cv}"
+  grep -q 'db_load_engine' "${root}/lib/verify.sh"
+  grep -q 'lib_source db.sh' <<<"${cv}"
+
+  # init | discover | doctor -> state.sh (state_get_repo, state_field)
+  local idd; idd="$(branch_for '    init | discover | doctor)')"
+  [ -n "${idd}" ]
+  grep -q 'state_get_repo' "${root}/lib/doctor.sh"
+  grep -q 'lib_source state.sh' <<<"${idd}"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 21: a healthy repository was reported as a failed check
+# -----------------------------------------------------------------------------
+# state_touch's sidecar branch piped `grep -v "^key="` into the rewrite. grep
+# exits 1 when it selects no lines, which is the NORMAL case the first time a
+# key is written - and under `set -euo pipefail` that killed the whole command
+# after the write had already landed. The visible result was restic printing
+#     no errors were found
+# followed by `bg-backup check` exiting 1.
+@test "regression: state_touch survives the first write of a key under set -e" {
+  bgb_load_lib core state
+
+  # bin/bg-backup.sh runs with exactly these options and the bug exists only
+  # under them, so asserting without them would prove nothing.
+  (set -euo pipefail; state_touch check_at "2026-01-01T00:00:00Z")
+  [ -s "${BGB_STATE_DIR}/_repo.env" ]
+
+  # And again, now that grep DOES match - the key must be replaced, not doubled.
+  (set -euo pipefail; state_touch check_at "2026-01-02T00:00:00Z")
+  [ "$(grep -c '^check_at=' "${BGB_STATE_DIR}/_repo.env")" -eq 1 ]
+  grep -q '^check_at=2026-01-02T00:00:00Z$' "${BGB_STATE_DIR}/_repo.env"
+
+  # A second, different key must not disturb the first.
+  (set -euo pipefail; state_touch prune_at "2026-01-03T00:00:00Z")
+  grep -q '^check_at=2026-01-02T00:00:00Z$' "${BGB_STATE_DIR}/_repo.env"
+  grep -q '^prune_at=2026-01-03T00:00:00Z$' "${BGB_STATE_DIR}/_repo.env"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 22: retention never removed anything, on any host, under any policy
+# -----------------------------------------------------------------------------
+# See tests/unit/retention.bats for the argv assertions. The short version:
+# forget ran with `--group-by host,tags`, restic groups by the COMPLETE tag set,
+# and restic_tag_args() stamps a unique `run=<id>` on every snapshot - so every
+# snapshot was its own group of one and --keep-last N kept it. Repositories grew
+# without bound while forget exited 0 saying "nothing to remove".
+#
+# This test guards the PRECONDITION that makes that grouping fatal, which lives
+# in a different module and would otherwise be free to come back.
+@test "regression: every snapshot carries a unique run tag, so forget must not group by tags" {
+  bgb_load_lib core redact json config restic
+
+  local -a a=() b=()
+  mapfile -t a < <(restic_tag_args job1 RUN-AAA)
+  mapfile -t b < <(restic_tag_args job1 RUN-BBB)
+
+  bgb_argv_has "run=RUN-AAA" "${a[@]}"
+  bgb_argv_has "run=RUN-BBB" "${b[@]}"
+  # Same job, different run: the tag SETS differ, which is precisely what makes
+  # `--group-by tags` put them in separate groups.
+  ! bgb_argv_has "run=RUN-BBB" "${a[@]}"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 23: verify raised a backup outage on every host that was perfectly healthy
+# -----------------------------------------------------------------------------
+# verify_canary piped `restic dump` straight into sha256sum, discarding restic's
+# exit status. When the canary file is not inside the job's paths - which is the
+# normal case, since it lives under /var/lib/bg-backup and jobs back up /srv,
+# /etc or a database - dump produced NOTHING, and sha256sum of empty input is
+# e3b0c442...b7852b855: a valid hash that never matches. So verify reported
+#     CANARY MISMATCH - the restore path is broken
+#     VERIFICATION FAILED. Treat this as a backup outage.
+# every month, on healthy backups. A false alarm of that severity is worse than
+# no check: it teaches operators to ignore the one command that proves restores.
+@test "regression: an absent canary is a warning, not a corrupted restore path" {
+  bgb_load_lib core redact json config state verify
+
+  # The empty-input hash, spelled out - this is the value that used to be
+  # compared against a real one and reported as corruption.
+  local empty_sha
+  empty_sha="$(printf '' | sha256sum | awk '{print $1}')"
+  [ "${empty_sha}" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]
+
+  # verify_canary must not treat "dump produced nothing" as a mismatch.
+  local body
+  body="$(awk '/^verify_canary\(\)/,/^}/' "${BGB_LIB_DIR}/verify.sh")"
+  [ -n "${body}" ]
+  # The status has to be kept ...
+  grep -qE 'rc_dump|\|\| rc_' <<<"${body}"
+  # ... and an empty dump must return before any comparison.
+  grep -q 'no canary inside job' <<<"${body}"
+  # The shape that caused it must not come back.
+  ! grep -qE 'restic_exec dump .*\| *sha256sum' <<<"${body}"
+}

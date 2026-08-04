@@ -241,6 +241,12 @@ dispatch() {
     init | discover | doctor)
       lib_source config.sh
       lib_source restic.sh
+      # state.sh: doctor reads the last-run state to age its findings
+      # (state_get_repo, state_field, state_age_hours). Without it doctor died
+      # mid-report with "state_get_repo: command not found" - after printing
+      # enough sections to look like it had worked. Sourcing it for init and
+      # discover too costs nothing and keeps this group honest.
+      lib_source state.sh
       lib_source "${cmd}.sh"
       "cmd_${cmd}" "${args[@]:-}"
       ;;
@@ -278,6 +284,16 @@ dispatch() {
       lib_source state.sh
       lib_source metrics.sh
       lib_source monitor.sh
+      # lock.sh: cmd_check calls lock_take_repo. It was missing, and the failure
+      # mode was worse than a crash - `lock_take_repo || return "${EX_LOCKED}"`
+      # turned "command not found" (127) into exit 5, so every `bg-backup check`
+      # reported that ANOTHER INSTANCE HELD THE LOCK. On a weekly timer that
+      # reads as a scheduling overlap, not as a command that cannot run.
+      #
+      # db.sh: verify_canary restores a database dump and calls db_load_engine
+      # to validate it, unless --no-databases is given.
+      lib_source lock.sh
+      lib_source db.sh
       lib_source verify.sh
       "cmd_${cmd}" "${args[@]:-}"
       ;;

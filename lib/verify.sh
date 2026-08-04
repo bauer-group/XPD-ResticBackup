@@ -28,7 +28,14 @@ _BGB_VERIFY_SOURCED=1
 # check
 # =============================================================================
 cmd_check() {
-  local read_data=0 subset="${BGB_CHECK_READ_DATA_SUBSET}"
+  # NOT `subset="${BGB_CHECK_READ_DATA_SUBSET}"`. That default is created by
+  # config_load(), which runs further down - so under `set -u` this line aborted
+  # the command before it parsed a single flag:
+  #     lib/verify.sh: line 31: BGB_CHECK_READ_DATA_SUBSET: unbound variable
+  # `bg-backup check` therefore never worked, on any host, and it is one of the
+  # two commands that run unattended on a systemd timer. The configured default
+  # is applied after config_load() instead, below.
+  local read_data=0 subset=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --read-data)
@@ -56,6 +63,14 @@ cmd_check() {
   config_load
   repo_env_load
   restic_require
+
+  # The configured default, now that config_load() has created it. Only when no
+  # flag asked for something else: --read-data-subset wins over the config, and
+  # --read-data means "read everything" and must not silently become a subset.
+  if [ "${read_data}" -eq 0 ] && [ -z "${subset}" ]; then
+    subset="${BGB_CHECK_READ_DATA_SUBSET}"
+  fi
+
   lock_take_repo || return "${EX_LOCKED}"
 
   local -a args=(check)
@@ -262,8 +277,26 @@ verify_canary() {
     return 0
   }
 
+  # Dump into a VARIABLE first, and keep restic's exit status. Piping it
+  # straight into sha256sum threw the status away and hashed whatever came out -
+  # and when the canary is not inside this job's paths, what comes out is
+  # nothing. sha256sum of empty input is a perfectly valid hash that never
+  # matches, so verify reported
+  #     CANARY MISMATCH - the restore path is broken
+  #     VERIFICATION FAILED. Treat this as a backup outage.
+  # on every host whose jobs do not happen to include /var/lib/bg-backup/canary
+  # - which is most of them. A monthly false alarm of that severity is worse
+  # than no check at all: it is how operators learn to ignore this tool.
+  local raw rc_dump=0
+  raw="$(restic_exec dump "${snap}" "${canary_dir}/${name}" 2>/dev/null)" || rc_dump=$?
+
+  if [ "${rc_dump}" -ne 0 ] || [ -z "${raw}" ]; then
+    warn_mark "no canary inside job '${job}' - add ${canary_dir} to its JOB_PATHS to cover the restore path"
+    return 0
+  fi
+
   local got
-  got="$(restic_exec dump "${snap}" "${canary_dir}/${name}" 2>/dev/null | sha256sum | awk '{print $1}')"
+  got="$(printf '%s' "${raw}" | sha256sum | awk '{print $1}')"
 
   if [ "${got}" = "${want}" ]; then
     ok_mark "canary restored and hashed correctly (${name})"

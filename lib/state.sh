@@ -117,14 +117,28 @@ state_touch() {
   if have jq && [ -f "${f}" ]; then
     jq --arg k "${key}" --arg v "${value}" '.[$k] = $v' "${f}" 2>/dev/null | atomic_write "${f}" 0640
   else
-    # Without jq, keep a flat key=value sidecar rather than losing the fact.
+    # Flat key=value sidecar rather than losing the fact.
+    #
+    # NOTE this is not the rare branch it looks like: the condition above also
+    # requires _repo.json to already EXIST, and nothing in the codebase ever
+    # creates it, so every host takes this path. state_get_repo() tests exactly
+    # the same condition and therefore reads the same file, so the two stay
+    # consistent - do NOT "fix" that by creating _repo.json here, which would
+    # point reads at an empty document and lose the history of every host that
+    # already has a populated sidecar.
+    #
+    # THE `|| true` IS LOAD-BEARING. grep exits 1 when it selects no lines,
+    # which is the normal case the first time a key is written (and whenever the
+    # sidecar holds only that key). With `set -e` and `pipefail` that killed the
+    # whole command AFTER the write had already happened, so `bg-backup check`
+    # printed restic's "no errors were found" and then exited 1 - a repository
+    # in perfect health reported as a failed check, on a weekly timer.
     local side="${BGB_STATE_DIR}/_repo.env"
     touch "${side}"
-    grep -v "^${key}=" "${side}" 2>/dev/null | {
-      cat
+    {
+      grep -v "^${key}=" "${side}" 2>/dev/null || true
       printf '%s=%s\n' "${key}" "${value}"
-    } \
-      | atomic_write "${side}" 0640
+    } | atomic_write "${side}" 0640
   fi
 }
 

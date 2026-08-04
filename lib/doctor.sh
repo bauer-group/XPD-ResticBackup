@@ -69,6 +69,20 @@ cmd_doctor() {
     esac
   done
 
+  # config_defaults, NOT config_load. doctor exists to run on a host whose
+  # configuration is broken, unreadable or absent, so it must never source it -
+  # but it still reads the settings that configuration would have provided
+  # (BGB_RESTIC_BIN, BGB_RESTIC_MIN_VERSION, BGB_ESCROW_*, ...). Without this
+  # line every one of those was an unset variable and `set -u` killed the
+  # command at the first one:
+  #     lib/doctor.sh: line 147: BGB_RESTIC_BIN: unbound variable
+  # `bg-backup doctor` therefore could not run at all - on any host, in any
+  # state. The installer e2e did not catch it because it ran doctor with
+  # `|| true` and then asserted that no secret appeared in the output: an empty
+  # log has no secrets in it, so both redaction assertions passed while checking
+  # nothing at all.
+  config_defaults
+
   printf '\n%sbg-backup doctor%s  (%s)\n' "${C_BOLD}" "${C_RESET}" "$(fqdn)" >&2
 
   doctor_check_environment "${fix}"

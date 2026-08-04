@@ -6,11 +6,13 @@
 # wrong is not "this host loses backups" but "another host loses backups":
 #
 #   1. SCOPING IS MANDATORY. Every forget carries
-#        --host <fqdn> --tag job=<name> --group-by host,tags
+#        --host <fqdn> --tag job=<name> --group-by host
 #      Without --host, one server's retention deletes another server's snapshots
 #      quietly and with exit 0. Without --tag job=, the docker job's policy is
 #      silently applied to the system job's snapshots. This is the single most
 #      likely catastrophic bug in a tool of this shape.
+#      The grouping is host ONLY - see retention_forget_args() for why adding
+#      `tags` there silently disabled retention altogether.
 #   2. Dry-run always runs first and its output is inspected.
 #   3. A floor: refuse if fewer than BGB_FORGET_MIN_SNAPSHOTS would remain.
 #   4. A ceiling: refuse if more than BGB_FORGET_MAX_DELETE_PERCENT would go.
@@ -31,10 +33,25 @@ retention_forget_args() {
   local job="$1" v
 
   printf 'forget\n'
-  # --- the three scoping arguments that must never be omitted ---------------
+  # --- the scoping arguments that must never be omitted ----------------------
+  # --host and --tag are FILTERS: they decide which snapshots restic considers
+  # at all, and cmd_forget() calls this once per job, so the candidate set is
+  # already exactly "this host, this job".
   printf -- '--host\n%s\n' "${BGB_HOSTNAME}"
   printf -- '--tag\njob=%s\n' "${job}"
-  printf -- '--group-by\nhost,tags\n'
+
+  # --group-by is NOT a filter, and it used to say `host,tags`. That looked like
+  # extra safety and was the opposite: `tags` groups by the COMPLETE tag set,
+  # and restic_tag_args() stamps every snapshot with a unique `run=<id>` tag. So
+  # every snapshot landed in a group of ONE, --keep-last 5 dutifully kept the
+  # single member of each group, and forget deleted nothing - ever, on any host,
+  # for any policy. It exited 0 and reported "nothing to remove", which is
+  # indistinguishable from a repository that is already within its policy.
+  #
+  # Grouping by host alone is what the policy needs: the job scoping is done by
+  # the --tag filter above, so within one invocation every candidate snapshot
+  # belongs to the same job by construction.
+  printf -- '--group-by\nhost\n'
   # --- the manual pin --------------------------------------------------------
   printf -- '--keep-tag\n%s\n' "${BGB_KEEP_TAG}"
 
@@ -217,7 +234,14 @@ cmd_forget() {
 # Command: prune
 # -----------------------------------------------------------------------------
 cmd_prune() {
-  local max_unused="${BGB_PRUNE_MAX_UNUSED}" dry=0
+  # NOT `max_unused="${BGB_PRUNE_MAX_UNUSED}"` - that default is created by
+  # config_load(), which runs further down, so under `set -u` this aborted the
+  # command before it parsed a flag:
+  #     lib/retention.sh: line 220: BGB_PRUNE_MAX_UNUSED: unbound variable
+  # `bg-backup prune` therefore never worked on any host, which also means the
+  # prune timer failed on every fire. The configured default is applied after
+  # config_load() instead, below.
+  local max_unused="" dry=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --max-unused)
@@ -244,6 +268,9 @@ cmd_prune() {
   config_load
   repo_env_load
   restic_require
+
+  # The configured default, now that config_load() has created it.
+  [ -n "${max_unused}" ] || max_unused="${BGB_PRUNE_MAX_UNUSED}"
 
   # The role check is a safety control, not a preference: prune rewrites pack
   # files, and two hosts doing that concurrently against one repository can

@@ -58,11 +58,56 @@ _args() {
   bgb_argv_has_pair --tag "job=docker" "${argv[@]}"
 }
 
-@test "forget groups by host and tags" {
+# THIS TEST USED TO ASSERT `host,tags` AND THAT IS WHY THE BUG SURVIVED.
+#
+# `--group-by tags` groups by the COMPLETE tag set, and restic_tag_args() stamps
+# every snapshot with a unique `run=<id>` tag. Every snapshot was therefore its
+# own group of one, --keep-last N kept the single member of each group, and
+# forget deleted nothing on any host under any policy - while exiting 0 and
+# reporting "nothing to remove". Repositories grew without bound and the
+# retention settings were decorative.
+#
+# The job scoping the old grouping appeared to provide is done by the --tag
+# filter asserted above; cmd_forget() calls the builder once per job, so the
+# candidate set is one host and one job by construction.
+@test "forget groups by host ONLY - grouping by tags disables retention" {
   JOB_KEEP_DAILY=7
   local -a argv=()
   mapfile -t argv < <(retention_forget_args docker)
-  bgb_argv_has_pair --group-by "host,tags" "${argv[@]}"
+  bgb_argv_has_pair --group-by "host" "${argv[@]}"
+
+  # And explicitly not the shape that broke it, in any ordering.
+  ! bgb_argv_has "host,tags" "${argv[@]}"
+  ! bgb_argv_has "tags,host" "${argv[@]}"
+}
+
+# The rails above are argv assertions; this one is behavioural, because argv
+# alone cannot show that a policy actually removes anything. A per-run tag on
+# each snapshot is exactly the condition that made grouping-by-tags a no-op.
+@test "forget with a per-run tag on every snapshot still selects for removal" {
+  bgb_skip_without jq
+  local -a argv=()
+  JOB_KEEP_LAST=5
+  JOB_KEEP_DAILY=""
+  JOB_KEEP_WEEKLY=""
+  JOB_KEEP_MONTHLY=""
+  mapfile -t argv < <(retention_forget_args maint)
+
+  # restic groups by whatever --group-by names. With `host` the ten snapshots
+  # below form ONE group and keep-last 5 removes five of them; with `host,tags`
+  # the unique run= tag would split them into ten groups of one and remove none.
+  local grouped_by=""
+  local i=0
+  while [ "${i}" -lt "${#argv[@]}" ]; do
+    [ "${argv[i]}" = "--group-by" ] && grouped_by="${argv[i + 1]}"
+    i=$((i + 1))
+  done
+  [ "${grouped_by}" = "host" ]
+
+  # The tag set restic would see, straight from the real builder.
+  local -a tags=()
+  mapfile -t tags < <(restic_tag_args maint "20260804T092614Z-jvf0eq")
+  bgb_argv_has "run=20260804T092614Z-jvf0eq" "${tags[@]}"
 }
 
 @test "forget always honours the manual pin tag" {
@@ -79,7 +124,10 @@ _args() {
   run _args docker
   [[ "$output" == *"--host"* ]]
   [[ "$output" == *"job=docker"* ]]
-  [[ "$output" == *"host,tags"* ]]
+  [[ "$output" == *"--group-by"* ]]
+  # Explicitly NOT host,tags - that grouping made forget a no-op. See the
+  # "forget groups by host ONLY" test above.
+  [[ "$output" != *"host,tags"* ]]
 }
 
 # -----------------------------------------------------------------------------
