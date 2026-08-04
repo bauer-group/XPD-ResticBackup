@@ -50,6 +50,16 @@ TIMEOUT="${BGB_RIG_TIMEOUT:-120}"
   exit 1
 }
 
+# Same reasoning: the notification sink is part of the backend, and `docker
+# compose run victim` would never start it on its own. --wait here because
+# notify.sh talks to it in its very first section, so a sink that is merely
+# "starting" produces a connection-refused that reads like a broken notifier.
+"${COMPOSE[@]}" up -d --wait webhook-sink >/dev/null || {
+  echo "rig: the notification sink did not become healthy" >&2
+  "${COMPOSE[@]}" logs webhook-sink | tail -30 >&2
+  exit 1
+}
+
 "${COMPOSE[@]}" up -d minio-init >/dev/null || {
   echo "rig: could not start minio-init" >&2
   exit 1

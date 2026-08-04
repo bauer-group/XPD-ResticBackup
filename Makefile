@@ -32,7 +32,7 @@ SHELLSRC := $(shell git ls-files '*.sh' '*.bash' 2>/dev/null)
 SHELLCHECK_EXCLUDE := SC1091,SC2034
 
 .PHONY: help version lint format format-check test test-unit test-config bash51 \
-        rig-up rig-down rig-logs integration maintenance recovery docker-e2e \
+        rig-up rig-down rig-logs integration maintenance recovery scheduling notify docker-e2e \
         db-engines dr-rehearse e2e docs recovery-sheet submodules clean check-all
 
 help: ## Show this help
@@ -102,6 +102,21 @@ maintenance: rig-up ## check, verify, forget, prune, copy - and the ADR-0005 ide
 	$(COMPOSE) build victim
 	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/maintenance.sh
 
+scheduling: rig-up ## schedule sync/enable/disable/list and the generated units
+	@# lib/systemd.sh is the largest module here and had zero coverage. It
+	@# generates the units through which every backup, check and prune is
+	@# invoked, so a defect produces no backup at all - and nothing alerts on a
+	@# timer that never fires.
+	$(COMPOSE) build victim
+	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/scheduling.sh
+
+notify: rig-up ## prove an alert actually leaves the host
+	@# Points the webhook, Teams and Kuma URLs at the rig's throwaway HTTP sink
+	@# and reads the recording back. A dead notifier produces SILENCE, which is
+	@# indistinguishable from success - the worst thing to leave untested.
+	$(COMPOSE) build victim
+	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/notify.sh
+
 recovery: rig-up ## restore preview/system and dr plan/run/verify
 	@# Half of what this asserts is INERTNESS: preview must write nothing,
 	@# `dr plan` must write nothing, `dr run --dry-run` must change nothing.
@@ -135,6 +150,10 @@ e2e: ## Every e2e suite in sequence, each against its own fresh rig
 	$(MAKE) maintenance
 	$(MAKE) rig-down
 	$(MAKE) recovery
+	$(MAKE) rig-down
+	$(MAKE) scheduling
+	$(MAKE) rig-down
+	$(MAKE) notify
 	$(MAKE) rig-down
 	$(MAKE) docker-e2e
 	$(MAKE) rig-down

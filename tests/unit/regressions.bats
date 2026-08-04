@@ -1589,3 +1589,39 @@ _bgb_stdin_argv() {
   [ -n "${load_line}" ] && [ -n "${repo_line}" ]
   [ "${load_line}" -lt "${repo_line}" ]
 }
+
+# -----------------------------------------------------------------------------
+# BUG 27: `producer | grep -q` reports SIGPIPE as the pipeline's status
+# -----------------------------------------------------------------------------
+# grep -q exits the instant it matches, closing the pipe. The producer is then
+# killed by SIGPIPE and exits 141, and `set -o pipefail` makes THAT the status
+# of the pipeline - even though the match succeeded. It is also
+# non-deterministic: it only bites when the producer still has output to write
+# after the match, so the same idiom passes in one file and fails in another.
+#
+# This exact shape made an e2e assertion report that the installer had not armed
+# the timers, on a host where it demonstrably had. The same family already cost
+# this codebase three product bugs (state_touch, the dr_verify counters), which
+# is why it is worth a guard rather than a note.
+@test "regression: no e2e assertion pipes a producer into grep -q" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+
+  # Comments stripped: installer.sh explains the trap in prose, and grepping the
+  # raw file would fail on its own documentation.
+  local offenders=""
+  local f
+  for f in "${root}"/tests/e2e/*.sh; do
+    # printf/echo/cat producers are safe - they are builtins or finish in one
+    # write, so there is nothing left to SIGPIPE.
+    offenders+="$(sed 's/#.*//' "${f}" \
+      | grep -nE '[a-zA-Z_)"] \| *grep -q' \
+      | grep -vE 'printf|echo |cat ' \
+      | sed "s|^|  $(basename "${f}"):|")"
+  done
+
+  [ -z "${offenders}" ] || {
+    printf 'a match would be reported as a failure when the producer SIGPIPEs:\n%s\n' "${offenders}"
+    printf 'assign to a variable and use case/[[ ]], or write a file and grep it.\n'
+    false
+  }
+}

@@ -134,6 +134,26 @@ services:
       - rest_data:/data
     networks: [rig]
 
+  # A throwaway receiver for the notification channels. The unit suite proves
+  # only that each provider file LOADS; nothing ever showed that a delivery
+  # leaves the host. tests/e2e/notify.sh points the webhook, Teams and Uptime
+  # Kuma URLs here and then reads the recording back from /_requests.
+  #
+  # python:3-alpine with the script mounted, rather than a purpose-built image:
+  # the rig should not need a build step for eighty lines of stdlib.
+  webhook-sink:
+    image: python:3.13-alpine
+    command: ["python3", "/opt/sink.py", "8080"]
+    volumes:
+      - ./webhook-sink.py:/opt/sink.py:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/_requests')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    networks: [rig]
+
   # The host being backed up.
   victim:
     build:
@@ -147,6 +167,7 @@ services:
       <<: *identities
       BGB_IT_ENDPOINT: http://minio:9000
       BGB_IT_REST_ENDPOINT: http://rest-server:8000
+      BGB_IT_SINK: http://webhook-sink:8080
       BGB_IT_RESTIC_PASSWORD: ${BGB_IT_RESTIC_PASSWORD:-bgb-it-ci-throwaway-repo-passphrase}
     volumes:
       - dr_evidence:/evidence

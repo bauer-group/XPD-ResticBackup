@@ -39,8 +39,15 @@ sect "1. install.sh on a bare host"
 printf '%s' "${BGB_IT_RESTIC_PASSWORD}" >/root/.bgb-pass
 chmod 0400 /root/.bgb-pass
 
+# ENABLE_TIMERS=1 exercises install.sh's own arming branch, which calls
+# `bg-backup schedule sync && schedule enable`. No test ever set it, so those
+# four lines of the installer - the ones that decide whether a freshly built
+# host ever backs anything up on its own - had never run. The generator itself
+# is covered in depth by tests/e2e/scheduling.sh; what is asserted here is that
+# the INSTALLER reaches it.
 SOURCE_DIR="${SRC}" INSTALL_METHOD=local \
   INIT_REPO=1 \
+  ENABLE_TIMERS=1 \
   BGB_REPOSITORY="${REPO}" \
   BGB_PASSWORD_FILE=/root/.bgb-pass \
   BGB_S3_ACCESS_KEY="${BGB_IT_ACCESS_KEY}" \
@@ -53,7 +60,16 @@ ck $? "install.sh exits 0"
 ck $? "bg-backup is installed"
 [ -L /usr/local/sbin/bg-backup ]
 ck $? "bg-backup is a symlink into the release directory"
-readlink -f /usr/local/sbin/bg-backup | grep -q '^/opt/bg-backup/releases/'
+# NO `producer | grep -q` ANYWHERE IN THIS FILE, and the reason is worth
+# knowing: grep -q exits the moment it matches, which closes the pipe; the
+# producer then dies of SIGPIPE (141) and `set -o pipefail` makes THAT the
+# status of the pipeline - even though the match succeeded. It is also
+# non-deterministic, because it only happens when the producer still has output
+# to write after the match. One assertion in this file failed exactly that way
+# while the behaviour it tested was correct. Match against a variable, or grep a
+# file - either way, no pipeline.
+LINK="$(readlink -f /usr/local/sbin/bg-backup)"
+case "${LINK}" in /opt/bg-backup/releases/*) true ;; *) false ;; esac
 ck $? "the symlink points into /opt/bg-backup/releases"
 
 # -----------------------------------------------------------------------------
@@ -103,6 +119,18 @@ ck $? "the unit uses LoadCredential= (not EnvironmentFile=)"
 ! grep -qE '^[[:space:]]*EnvironmentFile=' /etc/systemd/system/bg-backup@.service
 ck $? "no credential is passed via EnvironmentFile="
 
+# The installer's arming branch, which ENABLE_TIMERS=1 above turned on.
+grep -qi 'enabling timers' /tmp/install.log
+ck $? "the installer reached its arming branch"
+
+# systemctl enable is a symlink operation and works without a booted systemd,
+# so this is a real assertion rather than a simulated one. daemon-reload cannot
+# work here and is expected to warn - that degradation is asserted in
+# tests/e2e/scheduling.sh.
+bg-backup schedule list >/tmp/sched-list.txt 2>/dev/null
+grep -qE 'bg-backup-check\.timer[[:space:]]+enabled' /tmp/sched-list.txt
+ck $? "the installer left the maintenance timers enabled"
+
 # -----------------------------------------------------------------------------
 sect "4. idempotence and refusals"
 
@@ -123,6 +151,22 @@ echo hello >/srv/data/plain.txt
 head -c 4096 /dev/urandom >/srv/data/sub/bin.dat
 ln -sf plain.txt /srv/data/link.txt
 : >/srv/data/empty.txt
+
+# Metrics ON, deliberately. Section 6 asserts that the Prometheus textfile is
+# still written when a run only PARTIALLY succeeds - and that assertion used to
+# be wrapped in `if [ -n "${BGB_METRICS_TEXTFILE:-}" ] || [ -d /var/lib/... ]`,
+# neither of which was ever true here. It took the else branch on every run and
+# reported "skipped" as a PASS, so the partial-run metrics path was never
+# exercised by anything. Setting the variable is what turns it into a test.
+cat >>/etc/bg-backup/bg-backup.conf <<'CONF'
+
+BGB_METRICS_TEXTFILE="/var/lib/node_exporter/textfile_collector/bg-backup.prom"
+CONF
+
+# metrics.sh deliberately REFUSES to create this directory and warns instead -
+# inventing a collector directory that no exporter reads would be silent
+# self-deception. node_exporter owns it on a real host, so the rig provides it.
+install -d -m 0755 /var/lib/node_exporter/textfile_collector
 
 cat >/etc/bg-backup/conf.d/50-e2e.conf <<'CONF'
 JOB_ENABLED=1
@@ -182,12 +226,21 @@ fi
 chmod 755 /srv/data/locked
 rm -rf /srv/data/locked
 
-if [ -n "${BGB_METRICS_TEXTFILE:-}" ] || [ -d /var/lib/node_exporter/textfile_collector ]; then
-  find /var/lib/node_exporter/textfile_collector -name 'bg-backup.prom' -size +0c >/dev/null 2>&1
-  ck $? "the metrics file was still written on a partial run"
-else
-  ok "metrics textfile not configured - skipped"
-fi
+# THE POINT OF THIS ASSERTION: a partial run is the case where monitoring
+# matters most, and it is also the case where an early `return` in the metrics
+# path is easiest to introduce. The exit code exported must be the PARTIAL one,
+# not a stale 0 from the previous successful run - an exporter that keeps
+# serving 0 through a degrading backup is worse than no exporter.
+PROM=/var/lib/node_exporter/textfile_collector/bg-backup.prom
+[ -s "${PROM}" ]
+ck $? "the metrics file was still written on a partial run"
+
+grep -q '^bg_backup_run_exit_code' "${PROM}" 2>/dev/null
+ck $? "it exports the run exit code"
+
+grep -E '^bg_backup_run_exit_code' "${PROM}" >/tmp/prom-rc.txt 2>/dev/null
+grep -qE '[[:space:]]3$' /tmp/prom-rc.txt
+ck $? "the exported exit code is the partial one (3), not a stale 0"
 
 # -----------------------------------------------------------------------------
 sect "7. forget refuses to delete everything"
@@ -307,7 +360,10 @@ ck $? "no snapshot was written for the failed dump (got ${N_BAD:-?})"
 # And the partial bytes must not be anywhere in the repository, under any
 # snapshot. This is the assertion that would catch a future switch to --stdin.
 restic_find_partial() {
-  restic find --json 'truncated.sql' 2>/dev/null | grep -q 'truncated.sql'
+  # File, not pipeline: restic keeps writing after a match and the SIGPIPE would
+  # be reported as the pipeline's status under pipefail.
+  restic find --json 'truncated.sql' >/tmp/find-partial.json 2>/dev/null || true
+  grep -q 'truncated.sql' /tmp/find-partial.json
 }
 export RESTIC_REPOSITORY="${REPO}"
 export RESTIC_PASSWORD="${BGB_IT_RESTIC_PASSWORD}"

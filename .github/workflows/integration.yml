@@ -102,6 +102,12 @@ jobs:
           - name: Recovery (preview/restore system/dr plan)
             suite: recovery.sh
             service: victim
+          - name: Scheduling (systemd units and timers)
+            suite: scheduling.sh
+            service: victim
+          - name: Notifications (webhook/Teams/Kuma/Prometheus)
+            suite: notify.sh
+            service: victim
           - name: Docker stack
             suite: docker-stack.sh
             service: docker-victim
