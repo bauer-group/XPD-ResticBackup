@@ -329,8 +329,10 @@ dr_plan_render() {
   # --- Packages --------------------------------------------------------------
   printf '\n%s2. PACKAGES%s\n\n' "${C_BOLD}" "${C_RESET}"
   local nman nhold
-  nman="$(grep -c '^' "${BGB_FACTS_DIR}/packages-manual.txt" 2>/dev/null || echo 0)"
-  nhold="$(grep -c '^' "${BGB_FACTS_DIR}/packages-hold.txt" 2>/dev/null || echo 0)"
+  # wc -l rather than `grep -c '^' || echo 0` - see dr_verify() for why that
+  # idiom yields the two-line string "0\n0" on an empty file.
+  nman="$(wc -l <"${BGB_FACTS_DIR}/packages-manual.txt" 2>/dev/null | tr -d ' ' || echo 0)"
+  nhold="$(wc -l <"${BGB_FACTS_DIR}/packages-hold.txt" 2>/dev/null | tr -d ' ' || echo 0)"
   printf '  %s package(s) to install, %s held\n' "${nman}" "${nhold}"
   printf '  Method: apt-mark hold, then one apt-get install transaction.\n'
   printf '  NOT dpkg --set-selections + dselect-upgrade: that removes packages the\n'
@@ -666,13 +668,29 @@ dr_restore_payload_dirs() {
   }
 
   log "Restoring payload directories from ${snap}"
-  local -a includes=(/etc /root /home /opt /srv /usr/local /var/www /data /var/docker)
-  local -a args=(restore "${snap}" --target /)
-  local p
-  for p in "${includes[@]}"; do args+=(--include "${p}"); done
 
-  # Excluding the dangerous paths at restore time is what makes "restore to /"
-  # safe here; they are staged separately in dr_stage_dangerous.
+  # EXCLUDES ONLY. This used to pass a whitelist of payload directories as
+  # --include AND the dangerous globs as --exclude, and restic rejects that
+  # combination outright:
+  #     Fatal: exclude and include patterns are mutually exclusive
+  # The failure went into `|| warn "Some payload paths could not be restored"`,
+  # so `restore system`, `dr run --phase system` and `dr bare-metal` all exited
+  # 0 having restored NOTHING. The entire system-restore path was inert.
+  #
+  # Of the two halves, the excludes are the one that must survive: they are what
+  # keeps /etc/machine-id, /boot and /var/lib/dpkg from being written over a
+  # freshly installed system, which is the failure this whole classification
+  # exists to prevent. Dropping them and keeping the whitelist would have
+  # restored exactly those files.
+  #
+  # What is given up is that a snapshot containing paths outside the payload
+  # whitelist now has them restored too. They are paths the operator chose to
+  # back up, minus everything classified NEVER or STAGED - which in a disaster
+  # recovery is the intent. The list below is kept as the documented shape of a
+  # payload backup; it is no longer passed to restic.
+  #
+  #   /etc /root /home /opt /srv /usr/local /var/www /data /var/docker
+  local -a args=(restore "${snap}" --target /)
   local class glob
   while read -r class glob; do
     case "${class}" in NEVER | STAGED) args+=(--exclude "${glob}") ;; esac
@@ -942,6 +960,20 @@ dr_list_dumps() {
 # verify
 # =============================================================================
 dr_verify() {
+  # `dr run` loads these before calling us, but `bg-backup dr verify` reaches
+  # this function straight from the dispatcher with nothing loaded - and the
+  # last and most important check reads BGB_REPO_ENV. Under `set -u` that was
+  # not a missing check, it was the end of the command:
+  #     lib/dr.sh: line 1012: BGB_REPO_ENV: unbound variable
+  # So dr verify printed its header, a few findings, and then died at exactly
+  # the question a recovered host most needs answered - can it reach its own
+  # backup repository. config_load() is guarded and repo_env_load() is
+  # idempotent, so calling them again from the `dr run --phase all` path is
+  # free.
+  config_load
+  repo_env_load
+  restic_require
+
   printf '\n%s=== DR verification ===%s\n\n' "${C_BOLD}" "${C_RESET}" >&2
   local fail=0 warns=0
 
@@ -960,7 +992,23 @@ dr_verify() {
   fi
 
   local failed
-  failed="$(systemctl list-units --state=failed --no-legend 2>/dev/null | grep -c '^' || echo 0)"
+  # TWO separate hazards, and fixing only the first is not enough.
+  #
+  # 1. `grep -c '^' || echo 0` prints 0 AND exits 1 when it matches nothing, so
+  #    the `|| echo 0` appended a SECOND zero and the variable became the
+  #    two-line string "0\n0". The comparison below then died with
+  #        lib/dr.sh: [: 0
+  #        0: integer expected
+  #    and dr verify reported "✗ 0\n0 failed unit(s)" on a host with none.
+  #
+  # 2. `set -o pipefail` makes a pipeline carry the status of ANY failing stage,
+  #    not just the last. systemctl exits non-zero whenever the host was not
+  #    booted with systemd - a container, a chroot, a rescue shell, which is
+  #    precisely where a recovery happens - so the assignment itself failed and
+  #    `set -e` ended the command with no message at all, right after the first
+  #    tick mark. Wrapping the producer in `{ ...; } || true` neutralises its
+  #    status without discarding its output, which `|| failed=0` would.
+  failed="$({ systemctl list-units --state=failed --no-legend 2>/dev/null || true; } | wc -l | tr -d ' ')"
   [ "${failed}" -eq 0 ] && ok_mark "no failed units" \
     || {
       bad_mark "${failed} failed unit(s): systemctl --failed"
@@ -969,7 +1017,9 @@ dr_verify() {
 
   if have docker && docker info >/dev/null 2>&1; then
     local running expected
-    running="$(docker ps -q | grep -c '^' || echo 0)"
+    # Same shape as the unit counter above: the producer's status must not
+    # reach the pipeline under `set -o pipefail`.
+    running="$({ docker ps -q 2>/dev/null || true; } | wc -l | tr -d ' ')"
     expected="$(jq '[.projects[]?.containers[]?] | length' "${BGB_FACTS_DIR}/docker-manifest.json" 2>/dev/null || echo 0)"
     if [ "${running}" -ge "${expected}" ] && [ "${expected}" -gt 0 ]; then
       ok_mark "${running} container(s) running (expected ${expected})"

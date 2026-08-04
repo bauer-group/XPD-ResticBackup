@@ -1502,3 +1502,90 @@ _bgb_stdin_argv() {
   # The shape that caused it must not come back.
   ! grep -qE 'restic_exec dump .*\| *sha256sum' <<<"${body}"
 }
+
+# -----------------------------------------------------------------------------
+# BUG 24: the whole system-restore path restored nothing, and said it was fine
+# -----------------------------------------------------------------------------
+# dr_restore_payload_dirs() passed a whitelist of payload directories as
+# --include AND the NEVER/STAGED globs as --exclude. restic rejects that
+# combination outright:
+#     Fatal: exclude and include patterns are mutually exclusive
+# The failure was absorbed by `|| warn "Some payload paths could not be
+# restored"`, so `restore system`, `dr run --phase system` and `dr bare-metal`
+# exited 0 having written nothing at all.
+@test "regression: the payload restore never mixes include and exclude patterns" {
+  bgb_load_lib core redact json config
+
+  local body
+  body="$(awk '/^dr_restore_payload_dirs\(\)/,/^}/' "${BGB_LIB_DIR}/dr.sh" | sed 's/#.*//')"
+  [ -n "${body}" ]
+
+  # The excludes are the half that must survive - they are what keeps
+  # /etc/machine-id and /boot off a freshly installed system.
+  grep -q -- '--exclude' <<<"${body}"
+  # restic refuses the pair, so --include must not be built here at all.
+  ! grep -q -- '--include' <<<"${body}"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 25: `grep -c '^' || echo 0` yields the two-line string "0\n0"
+# -----------------------------------------------------------------------------
+# grep -c prints 0 AND exits 1 when it matches nothing, so the `|| echo 0`
+# appends a SECOND zero. dr_verify then compared that against an integer:
+#     lib/dr.sh: line 964: [: 0
+#     0: integer expected
+# and reported "✗ 0\n0 failed unit(s)" on a host with no failed units.
+@test "regression: counting an empty stream yields one number, not two" {
+  # The idiom itself, demonstrated rather than described.
+  local broken fixed
+  broken="$(printf '' | grep -c '^' || echo 0)"
+  fixed="$(printf '' | wc -l | tr -d ' ')"
+  [ "$(printf '%s' "${broken}" | wc -l | tr -d ' ')" -eq 1 ]  # two lines
+  [ "${fixed}" = "0" ]
+
+  # And the arithmetic that used to die on it now works.
+  [ "${fixed}" -eq 0 ]
+
+  # No counter that feeds a numeric comparison may use the broken form.
+  # Comments stripped first: dr.sh explains the idiom in prose at both sites it
+  # used to appear, and grepping the raw file failed on its own documentation.
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+  ! sed 's/#.*//' "${root}/lib/dr.sh" | grep -nE "grep -c '\^'[^|]*\|\| echo 0"
+
+  # AND the producer's status must not reach the pipeline. `set -o pipefail`
+  # carries a failure from ANY stage, and systemctl exits non-zero on a host
+  # that was not booted with systemd - a container, a chroot, a rescue shell,
+  # which is exactly where a recovery runs. The assignment then failed and
+  # `set -e` ended dr verify silently after its first tick mark.
+  local counters
+  counters="$(sed 's/#.*//' "${root}/lib/dr.sh" | grep -E '(systemctl|docker ps).*wc -l')"
+  [ -n "${counters}" ]
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    [[ "${line}" == *'|| true'* ]]
+  done <<<"${counters}"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 26: dr verify died at the one question a recovered host must answer
+# -----------------------------------------------------------------------------
+# `bg-backup dr verify` reaches dr_verify() straight from the dispatcher with no
+# configuration loaded, and its final check reads BGB_REPO_ENV. Under `set -u`
+# that ended the command:
+#     lib/dr.sh: line 1012: BGB_REPO_ENV: unbound variable
+# It printed a header and some findings first, so it looked like a report that
+# had simply found problems - rather than one that never finished.
+@test "regression: dr verify loads its configuration before reading it" {
+  local body
+  body="$(awk '/^dr_verify\(\)/,/^}/' "${BGB_LIB_DIR}/dr.sh" | sed 's/#.*//')"
+  [ -n "${body}" ]
+
+  grep -q 'config_load' <<<"${body}"
+  grep -q 'repo_env_load' <<<"${body}"
+  # It must load them BEFORE the repository check that reads BGB_REPO_ENV.
+  local load_line repo_line
+  load_line="$(grep -n 'repo_env_load' <<<"${body}" | head -1 | cut -d: -f1)"
+  repo_line="$(grep -n 'BGB_REPO_ENV' <<<"${body}" | head -1 | cut -d: -f1)"
+  [ -n "${load_line}" ] && [ -n "${repo_line}" ]
+  [ "${load_line}" -lt "${repo_line}" ]
+}
