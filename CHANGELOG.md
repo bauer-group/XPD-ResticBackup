@@ -1,3 +1,11 @@
+## [0.2.1](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.2.0...v0.2.1) (2026-08-05)
+
+### 🐛 Bug Fixes
+
+* **core:** repaired eight commands found dead by real execution ([fea25ff](https://github.com/bauer-group/XPD-ResticBackup/commit/fea25ffb1c8e6591fbd53ed5275535c4ea78af85))
+* **core:** repaired six commands that could never run ([513144a](https://github.com/bauer-group/XPD-ResticBackup/commit/513144a1eaf309b22c4e8ecb1390329ac0aabfbc))
+* **dr:** repaired the entire system-restore path ([9415c13](https://github.com/bauer-group/XPD-ResticBackup/commit/9415c13349a1f8236b5586ab37ca69940e5e1380))
+
 ## [0.2.0](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.1.3...v0.2.0) (2026-08-03)
 
 ### 🚀 Features
