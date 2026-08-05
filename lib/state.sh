@@ -205,7 +205,11 @@ state_field() {
   else
     # Deliberately narrow fallback: enough for `status` to work on a rescue
     # system without jq, and not pretending to be a JSON parser.
-    sed -n "s/.*\"${field}\":\"\\([^\"]*\\)\".*/\\1/p;s/.*\"${field}\":\\([0-9.]*\\).*/\\1/p" "${f}" \
+    # `|| true` for the same reason as everywhere else in this file: head closes
+    # the pipe at the first line and sed can die of SIGPIPE, which pipefail
+    # would report as a failure of `status` on a rescue system - the one place
+    # this fallback exists to serve.
+    { sed -n "s/.*\"${field}\":\"\\([^\"]*\\)\".*/\\1/p;s/.*\"${field}\":\\([0-9.]*\\).*/\\1/p" "${f}" || true; } \
       | head -n1
   fi
 }

@@ -532,7 +532,9 @@ verify_restore_into_scratch() {
   fi
 
   local rand
-  rand="$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8)"
+  # See lib/secrets.sh: an endless producer into `head -c` is a SIGPIPE
+  # under pipefail, and the canary would never be written.
+  rand="$({ LC_ALL=C tr -dc 'a-z0-9' </dev/urandom 2>/dev/null || true; } | head -c 8)"
   local name="bgb-verify-${engine}-${rand}"
   local net="bgb-verify-${rand}"
 

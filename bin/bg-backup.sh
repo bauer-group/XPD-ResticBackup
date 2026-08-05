@@ -310,6 +310,14 @@ dispatch() {
     status | logs)
       lib_source config.sh
       lib_source state.sh
+      # restic.sh: status answers "can this host reach its repository, and is it
+      # locked" via restic_repo_reachable() and restic_is_locked(). lock.sh:
+      # lock_status() reports whether a run is in progress. Neither was sourced,
+      # so `bg-backup status` - the first command anybody types when a backup
+      # looks wrong - died with "restic_repo_reachable: command not found"
+      # halfway through its own report.
+      lib_source restic.sh
+      lib_source lock.sh
       lib_source status.sh
       "cmd_${cmd}" "${args[@]:-}"
       ;;
@@ -323,6 +331,15 @@ dispatch() {
     config | secrets)
       lib_source config.sh
       lib_source restic.sh
+      # state.sh: secrets_cmd_export records when the bundle was last written
+      # (state_touch export_at / config_hash) so doctor can warn that the
+      # recovery bundle no longer matches what is deployed. It was missing, and
+      # the export therefore finished its work - two independently encrypted
+      # copies, both round-trip verified - and then exited 127 with
+      # "state_touch: command not found". A bundle that exists while the command
+      # reports failure is the worst of both: the operator re-runs it, or worse,
+      # believes they have no bundle.
+      lib_source state.sh
       lib_source secrets.sh
       "cmd_${cmd}" "${args[@]:-}"
       ;;

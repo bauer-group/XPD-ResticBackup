@@ -186,6 +186,26 @@ internal_unquiesce() {
     esac
   done
 
+  # THE DISPATCHER EATS `--job` BEFORE THIS FUNCTION EVER SEES IT.
+  # bin/bg-backup.sh parses `--job <name>` as a GLOBAL filter into
+  # BGB_JOB_FILTER, so the shipped unit's
+  #     ExecStopPost=... internal unquiesce --job %i --if-needed
+  # arrived here with the job already consumed and died with
+  #     internal unquiesce requires --job <name>     (status 2)
+  # systemd then marked EVERY SUCCESSFUL BACKUP as failed - "Failed with result
+  # 'exit-code'", followed by "Triggering OnFailure= dependencies" - so the
+  # failure notifier fired after every good run and `systemctl --failed` listed
+  # every job. Invisible without booting systemd, which is why it survived: the
+  # backup itself succeeds, the snapshot is written, and only the unit's final
+  # state is wrong.
+  #
+  # Falling back to the global filter is exactly what config.sh, query.sh and
+  # restore.sh already do. Written as if/then rather than an && chain, which
+  # this codebase avoids under `set -e`.
+  if [ -z "${job}" ] && [ "${#BGB_JOB_FILTER[@]}" -gt 0 ]; then
+    job="${BGB_JOB_FILTER[0]}"
+  fi
+
   [ -n "${job}" ] || die "${EX_USAGE}" "internal unquiesce requires --job <name>"
 
   # Deliberately NO config_load here. This path must work with a broken or

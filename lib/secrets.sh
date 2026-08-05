@@ -51,7 +51,18 @@ cmd_secrets() {
 # cannot see a caller for.
 # shellcheck disable=SC2120
 secrets_cmd_export() {
-  local out="" passphrase_file="" recipients_file="${BGB_ESCROW_RECIPIENTS_FILE}" plain=0
+  # NOT `recipients_file="${BGB_ESCROW_RECIPIENTS_FILE}"`. That default is
+  # created by config_defaults(), and this function is reached from
+  # `bg-backup config export` through cmd_config, which has not loaded anything
+  # by the time the local declarations run. Under `set -u` that ended the
+  # command before it parsed a flag:
+  #     lib/secrets.sh: line 54: BGB_ESCROW_RECIPIENTS_FILE: unbound variable
+  # So `config export` - the command that MAKES the recovery bundle the whole
+  # disaster-recovery story depends on - could never run. Same defect class as
+  # check, prune and self-update; it survived the guard added for those because
+  # that guard only scanned functions named cmd_*, and this entry point is
+  # secrets_cmd_export.
+  local out="" passphrase_file="" recipients_file="" plain=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --out)
@@ -81,6 +92,9 @@ secrets_cmd_export() {
   require_root
   config_load
   [ -z "${out}" ] && out="${BGB_ESCROW_LOCAL}"
+  # The configured default, now that config_load() has created it. --recipients-file
+  # still wins, because it was parsed above.
+  [ -n "${recipients_file}" ] || recipients_file="${BGB_ESCROW_RECIPIENTS_FILE}"
   install -d -m 0700 "$(dirname "${out}")"
 
   local work
@@ -574,7 +588,13 @@ secrets_cmd_rotate() {
 
   local keyfile="${RESTIC_PASSWORD_FILE:-${BGB_CONFDIR}/credentials/repo.key}"
   local newpass
-  newpass="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+  # `{ producer; } || true`: /dev/urandom never ends, so `head -c N` closes the
+  # pipe and tr dies of SIGPIPE (141). Under `set -o pipefail` that becomes the
+  # status of the command substitution and `set -e` ends the command - which is
+  # why `secrets add-recovery-key` and `secrets rotate-repo-password` exited 141
+  # before printing a single line. Same trap as state_touch's grep and
+  # dr_verify's systemctl counters.
+  newpass="$({ LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null || true; } | head -c 32)"
   local newfile
   newfile="$(tmp_file "newkey.XXXXXX")"
   printf '%s' "${newpass}" >"${newfile}"
@@ -608,9 +628,25 @@ EOF
   # one. Removing first and discovering the new key is wrong afterwards means
   # the repository is unreachable with either.
   log "Verifying the new key from a clean environment"
+  # RESTIC_CACHE_DIR IS NOT OPTIONAL HERE, and its absence is why this check -
+  # the most careful step in the whole command - was the one thing guaranteed to
+  # fail. `env -i` clears everything, including HOME, and restic then refuses to
+  # start at all:
+  #     unable to open cache: unable to locate cache directory:
+  #     neither $XDG_CACHE_HOME nor $HOME are defined
+  # The verification therefore reported "the new key does NOT open the
+  # repository" for a key that was perfectly good, and rotation stopped - every
+  # time, on every host - leaving the freshly added key orphaned in the
+  # repository. Five attempts, five stray keys nobody has the passphrase for.
+  #
+  # The cache directory is part of this tool's repository configuration, not
+  # ambient state, so passing it explicitly keeps the point of `env -i` intact:
+  # nothing is inherited, everything needed is named.
   if ! (env -i \
+    HOME="${HOME:-/root}" \
     RESTIC_REPOSITORY="${RESTIC_REPOSITORY}" \
     RESTIC_PASSWORD_FILE="${newfile}" \
+    RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-${BGB_CACHE_DIR}}" \
     AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" \
     AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \
     AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-}" \
@@ -631,7 +667,13 @@ EOF
   fi
 
   log "Re-exporting the recovery bundle so it matches the new passphrase"
-  secrets_cmd_export || warn "Bundle export failed - run 'bg-backup config export' manually"
+  # A SUBSHELL, because `|| warn` cannot catch what secrets_cmd_export does on
+  # its unhappy paths: it calls die(), and die() calls exit. So a host with no
+  # escrow passphrase configured saw the rotation do all of its work - new key
+  # added, verified, installed, old key removed - and then exit 4, reporting
+  # failure for a rotation that had completely succeeded. An operator reading
+  # that exit code would reasonably try again, adding a second stray key.
+  (secrets_cmd_export) || warn "Bundle export failed - run 'bg-backup config export' manually"
 
   printf '\n%sNEW REPOSITORY PASSPHRASE - store it off this host now:%s\n\n    %s\n\n' \
     "${C_BOLD}${C_YELLOW}" "${C_RESET}" "${newpass}" >&2
@@ -644,7 +686,13 @@ secrets_cmd_add_recovery_key() {
   restic_require
 
   local pass
-  pass="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+  # `{ producer; } || true`: /dev/urandom never ends, so `head -c N` closes the
+  # pipe and tr dies of SIGPIPE (141). Under `set -o pipefail` that becomes the
+  # status of the command substitution and `set -e` ends the command - which is
+  # why `secrets add-recovery-key` and `secrets rotate-repo-password` exited 141
+  # before printing a single line. Same trap as state_touch's grep and
+  # dr_verify's systemctl counters.
+  pass="$({ LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null || true; } | head -c 32)"
   local pf
   pf="$(tmp_file "reckey.XXXXXX")"
   printf '%s' "${pass}" >"${pf}"

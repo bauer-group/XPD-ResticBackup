@@ -242,7 +242,9 @@ init_generate_passphrase() {
   # 32 characters from a URL/shell-safe alphabet: it ends up in shell files,
   # documentation and occasionally a URL, and a quoting accident in any of those
   # is a worse failure than the entropy difference.
-  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 32
+  # Endless producer into `head -c` - see lib/secrets.sh for why the status
+  # has to be neutralised before pipefail turns it into a failure.
+  { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null || true; } | head -c 32
 }
 
 init_ask_repository() {

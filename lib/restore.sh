@@ -66,7 +66,14 @@ restore_is_dpkg_conffile_modified() {
   local path="$1" line want got
   have dpkg-query || return 1
   grep -qFx -- "${path}" /var/lib/dpkg/info/*.conffiles 2>/dev/null || return 1
-  want="$(grep -h " ${path#/}\$" /var/lib/dpkg/info/*.md5sums 2>/dev/null | awk '{print $1}' | head -n1)"
+  # `{ grep; } || true` and `awk '... ; exit'` rather than `grep | awk | head`.
+  # /var/lib/dpkg/info/*.md5sums is tens of megabytes on a real host, so head
+  # closes the pipe long before grep is done and grep dies of SIGPIPE - which
+  # `set -o pipefail` turns into the status of this assignment, and `set -e`
+  # into the end of the restore that was calling it. Same trap that silenced
+  # `self-update --check` and killed the key-management commands.
+  want="$({ grep -h " ${path#/}\$" /var/lib/dpkg/info/*.md5sums 2>/dev/null || true; } \
+    | awk '{ print $1; exit }')"
   [ -n "${want}" ] || return 1
   [ -r "${path}" ] || return 1
   got="$(md5sum "${path}" 2>/dev/null | awk '{print $1}')"

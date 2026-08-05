@@ -1336,17 +1336,29 @@ _bgb_stdin_argv() {
 
   local offenders="" f
   for f in "${root}"/lib/*.sh; do
-    offenders+="$(awk -v vars="${vars}" -v loaders="${loaders}" '
+    # ANY command entry point, not just cmd_*. This guard originally matched
+    # only ^cmd_ and therefore missed secrets_cmd_export(), which is reached as
+    # `bg-backup config export` and had exactly the same defect: it read
+    # BGB_ESCROW_RECIPIENTS_FILE in a local declaration, so the command that
+    # MAKES the recovery bundle could never run. The convention in this codebase
+    # is that an entry point has "cmd" in its name - cmd_check, schedule_cmd_sync,
+    # secrets_cmd_export, restore_path_cmd - so that is what is scanned.
+    # COMMENTS STRIPPED FIRST. The fixed functions explain the trap in prose,
+    # and the word "config_defaults" inside that explanation set the
+    # already-loaded flag before the `local` line was ever examined - so the
+    # guard silently stopped guarding the very functions it documents. FILENAME
+    # is passed in because the input is now a pipe.
+    offenders+="$(sed 's/#.*//' "${f}" | awk -v vars="${vars}" -v loaders="${loaders}" -v F="$(basename "${f}")" '
       BEGIN { n = split(vars, a, "\n") }
-      /^cmd_[a-z_]+\(\)/            { fn = $1; seen = 0; next }
+      /^[a-z_]*cmd[a-z_]*\(\)/      { fn = $1; seen = 0; next }
       fn && $0 ~ loaders            { seen = 1 }
       fn && !seen && /^[[:space:]]*local / {
         for (i = 1; i <= n; i++)
           if (a[i] != "" && index($0, "${" a[i] "}"))
-            printf "  %s:%d  %s reads %s before config_load\n", FILENAME, NR, fn, a[i]
+            printf "  %s:%d  %s reads %s before config_load\n", F, NR, fn, a[i]
       }
       /^}/                          { fn = "" }
-    ' "${f}")"
+    ')"
   done
 
   [ -z "${offenders}" ] || {
@@ -1415,6 +1427,26 @@ _bgb_stdin_argv() {
   [ -n "${idd}" ]
   grep -q 'state_get_repo' "${root}/lib/doctor.sh"
   grep -q 'lib_source state.sh' <<<"${idd}"
+
+  # status | logs -> restic.sh (restic_repo_reachable, restic_is_locked) and
+  # lock.sh (lock_status). Without them `bg-backup status` - the first command
+  # anybody types when a backup looks wrong - died halfway through its own
+  # report with "restic_repo_reachable: command not found".
+  local sl; sl="$(branch_for '    status | logs)')"
+  [ -n "${sl}" ]
+  grep -q 'restic_repo_reachable' "${root}/lib/status.sh"
+  grep -q 'lib_source restic.sh' <<<"${sl}"
+  grep -q 'lock_status' "${root}/lib/status.sh"
+  grep -q 'lib_source lock.sh' <<<"${sl}"
+
+  # config | secrets -> state.sh (state_touch). The export finished its work -
+  # two independently encrypted copies, both round-trip verified - and THEN
+  # exited 127 with "state_touch: command not found". A bundle that exists
+  # while the command reports failure is the worst of both outcomes.
+  local cs; cs="$(branch_for '    config | secrets)')"
+  [ -n "${cs}" ]
+  grep -q 'state_touch' "${root}/lib/secrets.sh"
+  grep -q 'lib_source state.sh' <<<"${cs}"
 }
 
 # -----------------------------------------------------------------------------
@@ -1624,4 +1656,149 @@ _bgb_stdin_argv() {
     printf 'assign to a variable and use case/[[ ]], or write a file and grep it.\n'
     false
   }
+}
+
+# -----------------------------------------------------------------------------
+# BUG 28: every successful backup was reported as a failed unit
+# -----------------------------------------------------------------------------
+# bin/bg-backup.sh parses `--job <name>` as a GLOBAL filter into BGB_JOB_FILTER
+# before any subcommand sees it. The shipped unit runs
+#     ExecStopPost=... bg-backup internal unquiesce --job %i --if-needed
+# so internal_unquiesce() received no --job at all and died with status 2.
+# systemd then recorded "Failed with result 'exit-code'" and fired OnFailure=
+# after every SUCCESSFUL run: the backup worked, the snapshot was written, and
+# the unit's final state said otherwise. `systemctl --failed` listed every job
+# and the failure notifier alerted nightly on healthy backups - the alert
+# fatigue this project's own comments warn about.
+#
+# Only visible on a host where systemd is PID 1, which is why it survived every
+# earlier suite.
+@test "regression: internal unquiesce accepts the job the dispatcher swallowed" {
+  bgb_load_lib core redact json internal
+
+  # The dispatcher would have consumed the flag and left the array populated.
+  BGB_JOB_FILTER=("swallowed")
+
+  run internal_unquiesce --if-needed
+  # It must NOT be the usage error. Anything else (including "nothing to undo")
+  # is fine - there is no quiesce journal in the sandbox.
+  [ "$status" -ne 2 ]
+  [[ "$output" != *"requires --job"* ]]
+}
+
+@test "regression: an explicit --job still wins over the global filter" {
+  bgb_load_lib core redact json internal
+  BGB_JOB_FILTER=("from-global")
+
+  run internal_unquiesce --job explicit --if-needed
+  [ "$status" -ne 2 ]
+  [[ "$output" != *"requires --job"* ]]
+}
+
+# The general rule, stated narrowly enough to stay true. Purely global flags
+# (--yes, --quiet, --json) are FINE in a unit - they are meant for the
+# dispatcher and nothing downstream needs them. The defect is passing --job,
+# which the dispatcher consumes, to a handler that then cannot see it. So:
+# every subcommand a shipped unit calls with --job must read BGB_JOB_FILTER.
+@test "regression: every unit that passes --job calls a handler that can read it" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+
+  local offenders="" line sub fn
+  while IFS= read -r line; do
+    # e.g. "... bg-backup internal unquiesce --job %i --if-needed"
+    sub="$(printf '%s' "${line}" \
+      | sed -nE 's|.*/bg-backup[[:space:]]+([a-z-]+)[[:space:]]+([a-z-]+).*|\1_\2|p')"
+    [ -n "${sub}" ] || continue
+    fn="${sub//-/_}"
+
+    # The handler must fall back to the global filter, or the flag is lost.
+    if ! grep -rq "BGB_JOB_FILTER" "${root}/lib/${sub%%_*}.sh" 2>/dev/null; then
+      offenders="${offenders}
+  ${fn}() does not read BGB_JOB_FILTER, but a unit passes it --job"
+    fi
+  done < <(grep -rh -- '--job' "${root}"/share/systemd/*.service 2>/dev/null)
+
+  [ -z "${offenders}" ] || {
+    printf 'a unit passes --job to a handler that cannot see it:%s\n' "${offenders}"
+    false
+  }
+}
+
+# -----------------------------------------------------------------------------
+# BUG 29: SIGPIPE silenced self-update and killed the key-management commands
+# -----------------------------------------------------------------------------
+# An endless or large producer piped into a consumer that exits early - `head
+# -c N`, `head -n1`, `grep -m1` - leaves the producer to die of SIGPIPE (141).
+# Under `set -o pipefail` that becomes the pipeline's status and under `set -e`
+# it ends the command, usually with no output at all. It has now cost this
+# codebase five separate defects:
+#
+#   secrets add-recovery-key / rotate-repo-password   exited 141, silently
+#   self-update --check                               exited 1, silently
+#   restore_is_dpkg_conffile_modified                 could abort a restore
+#   state_touch                                       reported a healthy check
+#                                                     as a failure
+#
+# The shapes below are the ones with an unbounded or large producer. Small,
+# fixed-size producers (`printf | grep | head`) are left alone deliberately -
+# they finish before the consumer exits, and rewriting them would be churn.
+@test "regression: no unbounded producer is piped into an early-exiting consumer" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+
+  local offenders="" f
+  for f in "${root}"/lib/*.sh "${root}"/lib/notify/*.sh "${root}"/bin/*.sh; do
+    # Comments stripped - every one of these sites now explains the trap in
+    # prose, and matching the explanation would report a fixed line as broken.
+    offenders+="$(sed 's/#.*//' "${f}"       | grep -nE '(urandom|curl -[a-zA-Z]*L?[^|]*https?://|dpkg/info/\*)[^|]*\| *(head|grep -m1)'       | grep -v '|| true'       | sed "s|^|  $(basename "${f}"):|")"
+  done
+
+  [ -z "${offenders}" ] || {
+    printf 'a producer that keeps writing is piped into a consumer that exits early:
+%s
+' "${offenders}"
+    printf 'wrap it as `{ producer; } || true | consumer`, or drop a pipeline stage.
+'
+    false
+  }
+}
+
+# The other half: a lookup that fails must SAY so. `self-update --check` exited
+# 1 with an empty log whenever GitHub returned anything other than a release -
+# no network, a rate limit, a repository without releases - which is
+# indistinguishable from a crash and tells the operator nothing to act on.
+@test "regression: a failed version lookup is reported, not inherited" {
+  local body
+  body="$(awk '/^cmd_self_update\(\)/,/^}/' "${BGB_LIB_DIR}/selfupdate.sh" | sed 's/#.*//')"
+  [ -n "${body}" ]
+
+  # It must branch on the lookup rather than let the assignment abort the shell.
+  grep -qE 'if .*selfupdate_latest_version|! latest=' <<<"${body}"
+  # And it must produce a message on that branch.
+  grep -q 'err ' <<<"${body}"
+}
+
+# -----------------------------------------------------------------------------
+# BUG 30: the safest step in the codebase was the one guaranteed to fail
+# -----------------------------------------------------------------------------
+# secrets_cmd_rotate() does the right thing in the right order: add the new key,
+# VERIFY it opens the repository, and only then remove the old one. The
+# verification runs under `env -i` so nothing ambient can make a broken key look
+# good - and `env -i` also clears HOME, at which point restic refuses to start:
+#     unable to open cache: unable to locate cache directory:
+#     neither $XDG_CACHE_HOME nor $HOME are defined
+# So the check reported "the new key does NOT open the repository" for a key
+# that was fine, rotation aborted every time on every host, and each attempt
+# left the freshly added key orphaned in the repository.
+@test "regression: the rotation's clean-environment check gives restic a cache" {
+  local body
+  body="$(awk '/^secrets_cmd_rotate\(\)/,/^}/' "${BGB_LIB_DIR}/secrets.sh" | sed 's/#.*//')"
+  [ -n "${body}" ]
+
+  # The env -i invocation must name a cache directory, or restic cannot run.
+  grep -q 'env -i' <<<"${body}"
+  grep -q 'RESTIC_CACHE_DIR' <<<"${body}"
+
+  # And it must still be env -i - dropping the isolation to "fix" this would
+  # mean a broken key could be verified by inherited state.
+  grep -qE 'env -i' <<<"${body}"
 }

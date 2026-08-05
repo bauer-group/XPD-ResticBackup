@@ -72,9 +72,19 @@ cmd_self_update() {
     return $?
   }
 
-  local latest
-  latest="$(selfupdate_latest_version "${channel}")"
-  [ -n "${want}" ] && latest="${want}"
+  # An empty or failed lookup must be REPORTED, not inherited. Previously the
+  # assignment simply failed and `set -e` ended the command with no message: an
+  # operator running `self-update --check` on a host behind a proxy saw exit 1
+  # and nothing else.
+  local latest=""
+  if [ -n "${want}" ]; then
+    latest="${want}"
+  elif ! latest="$(selfupdate_latest_version "${channel}")" || [ -z "${latest}" ]; then
+    err "Could not determine the latest '${channel}' release."
+    err "api.github.com was unreachable, rate-limited, or has no release for"
+    err "${BGB_REPO_SLUG}. Check outbound HTTPS, or pass --version explicitly."
+    return "${EX_PRECOND}"
+  fi
 
   if [ -z "${latest}" ]; then
     err "Could not determine the available version (no network, or GitHub is unreachable)"
@@ -124,8 +134,26 @@ selfupdate_latest_version() {
       ;;
   esac
   have curl || return 1
-  curl -fsSL "https://api.github.com/repos/${BGB_REPO_SLUG}/releases/latest" 2>/dev/null \
-    | grep -m1 '"tag_name"' | cut -d'"' -f4
+
+  # NOT `curl ... | grep -m1 ... | cut`. Two things went wrong with that:
+  #
+  #   * grep -m1 exits at the first match and closes the pipe, so curl dies of
+  #     SIGPIPE and `set -o pipefail` makes 141 the pipeline's status.
+  #   * when GitHub returns anything that is NOT a release - no network, a rate
+  #     limit, a repository with no releases yet - grep matches nothing and
+  #     returns 1. Either way the command substitution in cmd_self_update failed
+  #     and `set -e` ended the command with NO OUTPUT AT ALL. `self-update
+  #     --check` exited 1 in silence, which is indistinguishable from a crash
+  #     and tells the operator nothing about what to fix.
+  #
+  # Fetch first, parse second, and let the caller report the difference.
+  local body tag
+  body="$(curl -fsSL "https://api.github.com/repos/${BGB_REPO_SLUG}/releases/latest" 2>/dev/null)" \
+    || return 1
+  tag="$(printf '%s' "${body}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  tag="${tag%%$'\n'*}"
+  [ -n "${tag}" ] || return 1
+  printf '%s' "${tag}"
 }
 
 selfupdate_rollback() {
