@@ -1802,3 +1802,54 @@ _bgb_stdin_argv() {
   # mean a broken key could be verified by inherited state.
   grep -qE 'env -i' <<<"${body}"
 }
+
+# -----------------------------------------------------------------------------
+# BUG 31: an e2e suite that git does not know is executable
+# -----------------------------------------------------------------------------
+# The workflow invokes each suite directly:
+#     docker compose run --rm victim /opt/bgb/tests/e2e/<suite>.sh
+# so a file checked in as 100644 fails before its first line runs:
+#     OCI runtime create failed: exec: "...": permission denied
+#
+# This is invisible on a Windows checkout, where core.fileMode is false and
+# `chmod +x` never reaches the index, and invisible in a local docker run, where
+# the file arrives with permissive modes anyway. It has now bitten this
+# repository twice - see the earlier commit "fix(ci): made the test scripts
+# executable" - which is exactly the profile of a defect worth a cheap guard.
+@test "regression: every e2e suite is executable in the git index" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+
+  # The index, not the working tree: the working tree lies on Windows.
+  local offenders=""
+  while read -r mode _ _ path; do
+    case "${mode}" in
+      100755) ;;
+      *) offenders="${offenders}
+  ${path} is ${mode}, must be 100755" ;;
+    esac
+  done < <(cd "${root}" && git ls-files -s 'tests/e2e/*.sh')
+
+  [ -z "${offenders}" ] || {
+    printf 'a suite the workflow execs directly is not marked executable:%s\n' "${offenders}"
+    printf 'fix with: git update-index --chmod=+x <path>\n'
+    false
+  }
+}
+
+# The same for anything else a workflow or the Makefile runs directly.
+@test "regression: every directly-invoked rig script is executable" {
+  local root; root="$(cd "${BGB_LIB_DIR}/.." && pwd)"
+
+  local offenders="" mode
+  for path in tests/rig/up.sh install.sh bin/bg-backup.sh; do
+    mode="$(cd "${root}" && git ls-files -s "${path}" | awk '{print $1}')"
+    [ -n "${mode}" ] || continue
+    [ "${mode}" = "100755" ] || offenders="${offenders}
+  ${path} is ${mode}, must be 100755"
+  done
+
+  [ -z "${offenders}" ] || {
+    printf 'a directly-invoked script is not marked executable:%s\n' "${offenders}"
+    false
+  }
+}
