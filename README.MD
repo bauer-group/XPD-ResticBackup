@@ -1,5 +1,5 @@
 <!-- AUTO-GENERATED FILE. DO NOT EDIT. Edit docs/README.template.MD instead. -->
-<!-- Generated on 2026-08-03 19:00:47 UTC -->
+<!-- Generated on 2026-08-05 08:16:23 UTC -->
 
 # bg-backup
 
