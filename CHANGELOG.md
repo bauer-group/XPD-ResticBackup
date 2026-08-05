@@ -1,3 +1,9 @@
+## [0.2.2](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.2.1...v0.2.2) (2026-08-05)
+
+### 🐛 Bug Fixes
+
+* **ci:** marked the new e2e suites executable ([e471597](https://github.com/bauer-group/XPD-ResticBackup/commit/e47159757cd96dd184d8b3ad021bc46a5a576360))
+
 ## [0.2.1](https://github.com/bauer-group/XPD-ResticBackup/compare/v0.2.0...v0.2.1) (2026-08-05)
 
 ### 🐛 Bug Fixes
