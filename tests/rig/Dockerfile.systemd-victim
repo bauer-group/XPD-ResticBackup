@@ -1,0 +1,53 @@
+# =============================================================================
+# bg-backup integration rig - a host that actually BOOTS systemd
+# =============================================================================
+# Every other victim in this rig installs systemd but never starts it, so the
+# scheduling suite can only verify unit FILES with `systemd-analyze verify`. Two
+# things that matter are invisible from there:
+#
+#   * whether a timer ever fires. A unit file can be syntactically perfect and
+#     still never run - a wrong OnCalendar, a missing WantedBy, an unsatisfied
+#     After= - and the symptom is silence, which nothing alerts on.
+#   * whether LoadCredential= actually delivers. It is the security control this
+#     project chose over EnvironmentFile=, and until the unit really starts, all
+#     that is proven is that the directive is spelled correctly.
+#
+# systemd as PID 1 needs a privileged container with the host cgroup namespace
+# and /sys/fs/cgroup writable; see the systemd-victim service in
+# docker-compose.yml. `systemctl is-system-running` reports "degraded" here
+# because a bare container cannot satisfy every default unit - that is expected
+# and is not what this rig measures.
+#
+# The suite is reached with `docker compose exec`, NOT `run`: `run` would
+# replace the container's command and systemd would never boot.
+# =============================================================================
+
+ARG UBUNTU_TAG=26.04
+FROM ubuntu:${UBUNTU_TAG}
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# systemd-sysv provides /sbin/init. dbus is what makes `systemctl` able to talk
+# to the manager rather than failing with "Failed to connect to bus".
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends \
+      ca-certificates curl systemd systemd-sysv dbus \
+ && rm -rf /var/lib/apt/lists/*
+
+# Units that cannot work in a container and only add noise to `systemctl
+# --failed`, which the suite asserts on. Masking them keeps a real failure
+# visible instead of buried under expected ones.
+RUN systemctl mask \
+      systemd-udevd.service systemd-udev-trigger.service \
+      systemd-networkd.service systemd-resolved.service \
+      systemd-firstboot.service systemd-logind.service \
+      getty.target console-getty.service \
+ || true
+
+COPY . /opt/bgb
+
+WORKDIR /opt/bgb
+ENV BGB_RIG_ROLE=systemd-victim
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

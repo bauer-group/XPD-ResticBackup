@@ -32,8 +32,9 @@ SHELLSRC := $(shell git ls-files '*.sh' '*.bash' 2>/dev/null)
 SHELLCHECK_EXCLUDE := SC1091,SC2034
 
 .PHONY: help version lint format format-check test test-unit test-config bash51 \
-        rig-up rig-down rig-logs integration maintenance recovery scheduling notify docker-e2e \
-        db-engines dr-rehearse e2e docs recovery-sheet submodules clean check-all
+        rig-up rig-down rig-logs integration maintenance recovery scheduling \
+        notify secrets query lifecycle systemd-boot docker-e2e db-engines \
+        dr-rehearse e2e docs recovery-sheet submodules clean check-all
 
 help: ## Show this help
 	@printf '\n\033[1mXPD-ResticBackup\033[0m - bg-backup v$(VERSION)\n\n'
@@ -117,6 +118,28 @@ notify: rig-up ## prove an alert actually leaves the host
 	$(COMPOSE) build victim
 	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/notify.sh
 
+secrets: rig-up ## config export/import round trip, key rotation, escrow
+	@# The bootstrap story: destroy /etc/bg-backup and rebuild it from the
+	@# bundle, and prove that a rotated passphrase really stops the old one
+	@# from opening the repository.
+	$(COMPOSE) build victim
+	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/secrets.sh
+
+query: rig-up ## status/logs/ls/find/diff/stats/runs/dump/mount/unlock
+	$(COMPOSE) build victim
+	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/query.sh
+
+lifecycle: rig-up ## self-update, rollback, uninstall and the systemd-only entry points
+	$(COMPOSE) build victim
+	$(COMPOSE) run --rm victim /opt/bgb/tests/e2e/lifecycle.sh
+
+systemd-boot: rig-up ## timers that really fire, on a host where systemd is PID 1
+	@# `exec`, not `run`: run replaces the command and systemd never boots.
+	$(COMPOSE) build systemd-victim
+	$(COMPOSE) up -d systemd-victim
+	@for i in $$(seq 1 30); do 	  $(COMPOSE) exec -T systemd-victim systemctl is-system-running 2>/dev/null 	    | grep -qE 'running|degraded' && break; sleep 2; done
+	$(COMPOSE) exec -T systemd-victim /opt/bgb/tests/e2e/systemd-boot.sh
+
 recovery: rig-up ## restore preview/system and dr plan/run/verify
 	@# Half of what this asserts is INERTNESS: preview must write nothing,
 	@# `dr plan` must write nothing, `dr run --dry-run` must change nothing.
@@ -154,6 +177,14 @@ e2e: ## Every e2e suite in sequence, each against its own fresh rig
 	$(MAKE) scheduling
 	$(MAKE) rig-down
 	$(MAKE) notify
+	$(MAKE) rig-down
+	$(MAKE) secrets
+	$(MAKE) rig-down
+	$(MAKE) query
+	$(MAKE) rig-down
+	$(MAKE) lifecycle
+	$(MAKE) rig-down
+	$(MAKE) systemd-boot
 	$(MAKE) rig-down
 	$(MAKE) docker-e2e
 	$(MAKE) rig-down

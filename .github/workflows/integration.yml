@@ -105,8 +105,17 @@ jobs:
           - name: Scheduling (systemd units and timers)
             suite: scheduling.sh
             service: victim
-          - name: Notifications (webhook/Teams/Kuma/Prometheus)
+          - name: Notifications (webhook/Teams/Kuma/mail/Prometheus)
             suite: notify.sh
+            service: victim
+          - name: Secrets (export/import/rotation/escrow)
+            suite: secrets.sh
+            service: victim
+          - name: Query commands (status/logs/ls/find/diff/stats)
+            suite: query.sh
+            service: victim
+          - name: Lifecycle (self-update/rollback/uninstall/internal)
+            suite: lifecycle.sh
             service: victim
           - name: Docker stack
             suite: docker-stack.sh
@@ -168,6 +177,69 @@ jobs:
         # `always()` and `-v`: a leaked MinIO volume on a self-hosted runner
         # would carry a previous run's repository into the next one, and a
         # rehearsal that restores yesterday's snapshot proves nothing.
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  # ===========================================================================
+  # systemd as PID 1. Not a matrix leg because it needs `up -d` + `exec` rather
+  # than `run`: `run` replaces the container's command and systemd never boots.
+  # ===========================================================================
+  systemd:
+    name: ⏰ systemd (timers really fire)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COMPOSE_PROJECT_NAME: bgbrigsysd
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: 🪣 Start the rig backend
+        run: bash tests/rig/up.sh
+
+      - name: 🏗️ Build systemd-victim
+        run: docker compose build systemd-victim
+
+      - name: 🥾 Boot it
+        # Give the manager a moment to reach its target before asking it to
+        # start units; the suite's own assertions then say whether it got there.
+        run: |
+          docker compose up -d systemd-victim
+          for _ in $(seq 1 30); do
+            if docker compose exec -T systemd-victim systemctl is-system-running 2>/dev/null \
+              | grep -qE 'running|degraded'; then
+              break
+            fi
+            sleep 2
+          done
+          docker compose exec -T systemd-victim systemctl is-system-running || true
+
+      - name: ⏰ systemd-boot.sh
+        # exec -T, and bare - no pipe, so the suite's exit status is the step's.
+        run: docker compose exec -T systemd-victim /opt/bgb/tests/e2e/systemd-boot.sh
+
+      - name: 📜 Collect rig logs
+        if: failure()
+        run: |
+          mkdir -p rig-logs
+          docker compose ps -a >rig-logs/compose-ps.txt 2>&1 || true
+          docker compose logs --no-color --timestamps >rig-logs/compose.log 2>&1 || true
+          docker compose exec -T systemd-victim journalctl --no-pager -n 500 \
+            >rig-logs/journal.txt 2>&1 || true
+
+      - name: 📤 Upload rig logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rig-logs-systemd
+          path: rig-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: 🧹 Tear down rig
         if: always()
         run: docker compose down -v --remove-orphans
 
@@ -237,12 +309,13 @@ jobs:
     name: 📊 Integration Summary
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [e2e, dr]
+    needs: [e2e, systemd, dr]
     if: always()
     steps:
       - name: 📊 Write job summary
         env:
           R_E2E: ${{ needs.e2e.result }}
+          R_SYSD: ${{ needs.systemd.result }}
           R_DR: ${{ needs.dr.result }}
         run: |
           mark() { case "$1" in success) echo "✅" ;; skipped) echo "⏭️" ;; *) echo "❌" ;; esac; }
@@ -252,6 +325,7 @@ jobs:
             echo "| Gate | Result |"
             echo "| --- | --- |"
             echo "| 🧪 e2e suites (installer, maintenance, docker, databases) | $(mark "${R_E2E}") ${R_E2E} |"
+            echo "| ⏰ systemd (timers fire) | $(mark "${R_SYSD}") ${R_SYSD} |"
             echo "| 🔥 DR rehearsal | $(mark "${R_DR}") ${R_DR} |"
             echo
             echo "> Every suite ran against its own fresh rig. A green result here"
@@ -261,7 +335,7 @@ jobs:
 
       - name: 🚦 Enforce aggregate result
         env:
-          RESULTS: ${{ needs.e2e.result }} ${{ needs.dr.result }}
+          RESULTS: ${{ needs.e2e.result }} ${{ needs.systemd.result }} ${{ needs.dr.result }}
         run: |
           for r in ${RESULTS}; do
             if [ "${r}" != "success" ]; then

@@ -173,6 +173,36 @@ services:
       - dr_evidence:/evidence
     networks: [rig]
 
+  # A host that BOOTS systemd, so a timer can actually fire and LoadCredential
+  # can actually deliver. Everywhere else in this rig systemd is installed but
+  # never started, which limits the scheduling suite to verifying unit FILES.
+  #
+  # Reached with `docker compose exec`, never `run`: run replaces the command
+  # and systemd would not boot. See Dockerfile.systemd-victim.
+  systemd-victim:
+    build:
+      context: ../..
+      dockerfile: tests/rig/Dockerfile.systemd-victim
+      args:
+        UBUNTU_TAG: ${BGB_UBUNTU_TAG:-26.04}
+    depends_on:
+      minio-init: {condition: service_completed_successfully}
+    privileged: true
+    # Both are required. Without the host cgroup namespace systemd refuses to
+    # start ("Failed to create /init.scope control group"); without the bind
+    # mount it cannot manage the hierarchy it was given.
+    cgroup: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    environment: *rig_env
+    # systemd shuts down on SIGRTMIN+3; the default SIGTERM makes it reboot
+    # instead, and `compose down` then waits out the full timeout.
+    stop_signal: SIGRTMIN+3
+    networks: [rig]
+
   # A host that runs its OWN Docker daemon, for JOB_MODE=docker. Privileged
   # because dockerd needs it; /var/lib/docker is a volume so the storage driver
   # gets a real filesystem. See Dockerfile.docker-victim for why the host

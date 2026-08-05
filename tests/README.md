@@ -22,14 +22,44 @@ tests/
 │   ├── docker-compose.yml
 │   ├── minio-init.json   buckets, IAM policies and identities, declaratively
 │   └── up.sh             starts the backend AND verifies the init really took
-└── e2e/                  installer, maintenance, recovery, docker, DBs, DR
+└── e2e/                  every command, executed at least once
     ├── installer.sh      the curl|bash path on a bare host
     ├── maintenance.sh    check/verify/forget/prune/copy + the ADR-0005 split
     ├── recovery.sh       restore preview/system + dr plan/run/verify
+    ├── scheduling.sh     schedule sync/enable/disable + the generated units
+    ├── systemd-boot.sh   timers that really fire, on systemd as PID 1
+    ├── notify.sh         webhook/Teams/Kuma/mail/Prometheus delivery
+    ├── secrets.sh        export/import round trip, key rotation, escrow
+    ├── query.sh          status/logs/ls/find/diff/stats/runs/dump/mount
+    ├── lifecycle.sh      self-update, rollback, uninstall, internal
     ├── docker-stack.sh   JOB_MODE=docker against a real daemon
     ├── db-engines.sh     eight engines, dumped consistently
     └── dr-*.sh           seed, destroy the host, restore onto a new one
 ```
+
+### Why every command is executed, even the boring ones
+
+Twenty-two defects in this codebase were found by running a command for the
+first time, and not one of them was subtle. `check` and `prune` aborted on an
+unbound variable; `status` died halfway through its own report; `config export`
+finished its work and then exited 127; `forget` deleted nothing under any
+policy; every successful backup was recorded by systemd as a failure. All of
+them were in code that looked right and had never been executed.
+
+So the rule this suite follows is: **no command ships without having run once
+against a real repository.** The assertions are deliberately shallow on
+formatting and strict on two things - that the command completes, and that its
+`--json` output is really JSON. Pinning table layouts would be a maintenance
+tax that catches nothing.
+
+### systemd as PID 1
+
+`systemd-boot.sh` runs in a privileged container that actually boots systemd,
+because two things are invisible from `systemd-analyze verify`: whether a timer
+ever fires, and whether `LoadCredential=` delivers anything. It is reached with
+`docker compose exec`, never `run` - `run` replaces the command and systemd
+never boots. It found the defect that made every successful backup report as
+failed.
 
 ### Proving that a command does nothing
 

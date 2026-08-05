@@ -20,10 +20,11 @@
 # /_requests. Prometheus is not an HTTP channel - it writes a textfile - so it
 # is asserted on disk in section 5.
 #
-# WHAT IS NOT COVERED: e-mail. It needs a local MTA, the victim image has none,
-# and installing one would test Postfix rather than bg-backup. Section 6
-# asserts the honest thing instead - that a configured but undeliverable
-# channel does not take the run down with it.
+# E-MAIL IS COVERED TOO, without an MTA. lib/notify/email.sh hands the message
+# to `/usr/sbin/sendmail -t`, so section 5b replaces that binary with one that
+# records what it was given. That tests the part bg-backup owns - recipients,
+# headers, subject, body, redaction - and not Postfix's relay logic, which is
+# not this project's to get right.
 #
 # Runs on tests/rig/Dockerfile.victim.
 # =============================================================================
@@ -269,6 +270,100 @@ ck $? "every sample line ends in a value${BADLINE:+ (offender: ${BADLINE})}"
 
 ! grep -q "${BGB_IT_SECRET_KEY}" "${METRICS}"
 ck $? "no backend secret in the metrics file"
+
+# -----------------------------------------------------------------------------
+sect "5b. e-mail, through a sendmail that records instead of relaying"
+
+# /usr/sbin/sendmail is what email.sh prefers, because -t reads the recipients
+# from the headers it wrote and it can carry the X- headers a mail rule filters
+# on. On a BAUER GROUP server that path is msmtp's compatibility link. Here it
+# is a recorder: the message bg-backup composes is exactly what would have been
+# relayed, and asserting on it needs no MTA at all.
+install -d /usr/sbin
+cat >/usr/sbin/sendmail <<'EOS'
+#!/bin/sh
+# Rig only. Records argv and the full message, then exits 0 like a real MTA
+# that accepted it for delivery.
+{
+  printf 'ARGV: %s
+' "$*"
+  cat
+  printf '
+--- end of message ---
+'
+} >>/tmp/sendmail.record
+exit 0
+EOS
+chmod 0755 /usr/sbin/sendmail
+
+: >/tmp/sendmail.record
+sed -i 's|^BGB_NOTIFIERS=.*|BGB_NOTIFIERS="email"|' /etc/bg-backup/bg-backup.conf
+cat >>/etc/bg-backup/bg-backup.conf <<'EOF'
+BGB_MONITOR_MAIL_TO="ops@rig.invalid"
+BGB_MONITOR_MAIL_FROM="bg-backup@rig.invalid"
+EOF
+
+# E-MAIL IS FOR FAILURES ONLY, deliberately - _email_should_send() passes
+# failure, degraded, check_failed and verify_failed, and the subject line is a
+# hardcoded "FAILURE". A nightly success e-mail is how a channel gets filtered
+# into a folder nobody reads, so a successful run must NOT produce one. Both
+# directions are asserted.
+cat >/usr/local/bin/bgb-mailfail <<'EOS'
+#!/bin/sh
+printf %s PARTIAL
+exit 1
+EOS
+chmod 0755 /usr/local/bin/bgb-mailfail
+
+cat >/etc/bg-backup/conf.d/59-mailfail.conf <<'CONF'
+JOB_ENABLED=1
+JOB_MODE="stdin"
+JOB_STDIN_COMMAND=( /usr/local/bin/bgb-mailfail )
+JOB_STDIN_FILENAME="/db/mailfail.sql"
+JOB_KEEP_LAST="5"
+JOB_QUIESCE="none"
+JOB_PRE_HOOKS=()
+CONF
+chmod 0640 /etc/bg-backup/conf.d/59-mailfail.conf
+
+bg-backup backup ntf >/tmp/backup-mail-ok.log 2>&1
+ck $? "a successful run with e-mail enabled still succeeds"
+[ ! -s /tmp/sendmail.record ]
+ck $? "a SUCCESSFUL run sends no e-mail"
+
+bg-backup backup mailfail >/tmp/backup-mail-fail.log 2>&1
+MRC=$?
+[ "${MRC}" -ne 0 ]
+ck $? "the failing job fails (exit ${MRC})"
+
+[ -s /tmp/sendmail.record ]
+ck $? "the FAILURE produced an e-mail"
+
+grep -q -- '-t' /tmp/sendmail.record
+ck $? "it is called with -t, so the headers carry the recipients"
+grep -q 'ops@rig.invalid' /tmp/sendmail.record
+ck $? "the configured recipient is in the message"
+grep -q '^To:' /tmp/sendmail.record
+ck $? "the message has a To: header"
+grep -q '^Subject:.*FAILURE' /tmp/sendmail.record
+ck $? "the subject says FAILURE"
+grep -q 'X-BG-Backup-Job: mailfail' /tmp/sendmail.record
+ck $? "the filterable X- header names the job"
+# A well-behaved recipient must not auto-reply into an MTA that is already
+# having a bad night.
+grep -q '^Auto-Submitted: auto-generated' /tmp/sendmail.record
+ck $? "it is marked auto-generated"
+
+# Same rule as every other channel: a mail relay is a third party.
+! grep -q "${BGB_IT_RESTIC_PASSWORD}" /tmp/sendmail.record
+ck $? "no passphrase in the e-mail"
+! grep -q "${BGB_IT_SECRET_KEY}" /tmp/sendmail.record
+ck $? "no backend secret in the e-mail"
+
+rm -f /etc/bg-backup/conf.d/59-mailfail.conf
+
+# Restore the HTTP channels for the sections that follow.
+sed -i 's|^BGB_NOTIFIERS=.*|BGB_NOTIFIERS="webhook teams uptime-kuma prometheus"|' /etc/bg-backup/bg-backup.conf
 
 # -----------------------------------------------------------------------------
 sect "6. a FAILING run alerts, and a dead channel does not take the run down"
