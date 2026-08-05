@@ -95,7 +95,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: 📥 Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: 🔧 Setup Go toolchain
         uses: actions/setup-go@v5
@@ -133,7 +133,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: 📥 Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # The e2e rig runs Ubuntu 26.04 ONLY - a deliberate choice, because a
       # structural defect shows up on every release and three distro legs mostly
@@ -174,7 +174,7 @@ jobs:
         # submodules: recursive brings in tests/helper/bats-core. Without it the
         # Makefile would try `git submodule update` against a checkout that has
         # no credentials for it, and the failure reads as a bats bug.
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
