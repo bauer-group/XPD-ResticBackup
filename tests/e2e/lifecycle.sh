@@ -123,8 +123,33 @@ no_abort /tmp/update-check.log "self-update --check runs (exit ${UC})"
 # non-zero with an empty log, which is indistinguishable from a crash.
 [ -s /tmp/update-check.log ]
 ck $? "it said something either way"
-grep -qiE 'version|latest|up to date|newer|release|unable|failed|network|rate' /tmp/update-check.log
-ck $? "the message is about updating, not a stack trace"
+
+# BOTH OUTCOMES, ASSERTED SEPARATELY. This used to be one grep for a list of
+# words that happened to appear in the FAILURE message - so it passed for
+# twenty-five days while the lookup was broken, and started failing the moment
+# the repository had a release and the command began working. A test that only
+# covers the unhappy path reports green for a broken command and red for a
+# repaired one.
+case "${UC}" in
+  0)
+    # A working check names the installed version, and either says there is
+    # nothing to do or names what is available.
+    grep -qE 'Installed:|Already on' /tmp/update-check.log
+    ck $? "a successful check reports the installed version"
+    grep -qE 'Available:|nothing to do' /tmp/update-check.log
+    ck $? "and says whether there is anything to upgrade to"
+    ;;
+  4)
+    # EX_PRECOND is legitimate on a rate-limited or offline runner, but it has
+    # to say which, or the operator has nothing to act on.
+    grep -qiE 'could not determine|unreachable|rate-limited|no release' /tmp/update-check.log
+    ck $? "a failed lookup says why"
+    ;;
+  *)
+    bad "self-update --check exited ${UC} - neither success nor EX_PRECOND"
+    sed 's/^/      /' /tmp/update-check.log | tail -15
+    ;;
+esac
 
 # --check must never change anything. It is what an operator runs to decide.
 CURRENT_BEFORE="$(readlink -f "${PREFIX}/current")"

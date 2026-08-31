@@ -182,7 +182,18 @@ ck $? "the timer is active"
 
 # NEXT must be a real point in time. "n/a" means the calendar expression never
 # resolves, which is a unit that will never run and looks perfectly healthy.
-NEXT="$(systemctl show -p NextElapseUSecRealtime --value bg-backup@tick.timer 2>/dev/null)"
+#
+# POLLED, not read once. With OnCalendar=*:*:0/15 the property is transiently
+# empty while the triggered service is running - systemd has fired and has not
+# yet computed the following elapse. A single read caught that window once in
+# roughly twenty nightly runs and failed a timer that demonstrably fired two
+# assertions later.
+NEXT=""
+for _ in $(seq 1 20); do
+  NEXT="$(systemctl show -p NextElapseUSecRealtime --value bg-backup@tick.timer 2>/dev/null)"
+  case "${NEXT}" in '' | 'n/a' | 0) ;; *) break ;; esac
+  sleep 1
+done
 [ -n "${NEXT}" ] && [ "${NEXT}" != "n/a" ] && [ "${NEXT}" != "0" ]
 ck $? "the timer has a next elapse (${NEXT:-none})"
 
