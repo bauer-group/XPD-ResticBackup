@@ -57,6 +57,15 @@ jobs:
     name: 🔐 Secret Scan (gitleaks)
     # Reusable-workflow jobs cannot carry `timeout-minutes`; the parser rejects
     # the key. The timeout is enforced inside the called workflow.
+    #
+    # Not on Dependabot pull requests. GitHub runs those like fork PRs and
+    # withholds Actions secrets, so GITLEAKS_LICENSE arrives empty and
+    # gitleaks-action refuses to scan an organisation repository ("missing
+    # gitleaks license"); the module reports that as unscanned and fails. The
+    # same commits are scanned by the push run when the PR lands on main, and
+    # by the weekly full-history pass. The summary job accepts exactly this
+    # skip. Drop the guard once GITLEAKS_LICENSE is also a Dependabot secret.
+    if: ${{ !(github.event_name == 'pull_request' && github.actor == 'dependabot[bot]') }}
     uses: bauer-group/automation-templates/.github/workflows/modules-security-scan.yml@main
     permissions:
       contents: read
@@ -193,8 +202,16 @@ jobs:
 
       - name: 🚦 Enforce aggregate result
         env:
-          RESULTS: ${{ needs.secret-scan.result }} ${{ needs.trufflehog.result }} ${{ needs.vulnerability-scan.result }} ${{ needs.license-compliance.result }}
+          R_GITLEAKS: ${{ needs.secret-scan.result }}
+          R_OTHERS: ${{ needs.trufflehog.result }} ${{ needs.vulnerability-scan.result }} ${{ needs.license-compliance.result }}
+          DEPENDABOT_PR: ${{ github.event_name == 'pull_request' && github.actor == 'dependabot[bot]' }}
         run: |
+          # gitleaks is skipped on purpose on Dependabot pull requests (see the
+          # secret-scan job). That one skip counts as a pass; any other does not.
+          if [ "${DEPENDABOT_PR}" = "true" ] && [ "${R_GITLEAKS}" = "skipped" ]; then
+            R_GITLEAKS="success"
+          fi
+          RESULTS="${R_GITLEAKS} ${R_OTHERS}"
           for r in ${RESULTS}; do
             if [ "${r}" != "success" ]; then
               echo "::error::A security scan did not pass (${RESULTS})"
