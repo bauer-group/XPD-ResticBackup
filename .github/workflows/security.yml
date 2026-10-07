@@ -64,10 +64,17 @@ jobs:
       actions: read
     with:
       scan-engine: 'gitleaks'
-      # Full, not diff-scoped. This repository is small; scanning everything on
-      # every run costs seconds and removes an entire class of "the secret was
-      # added in a commit the diff scan did not cover" excuses.
-      scan-type: 'full'
+      # The module accepts exactly 'secrets', 'vulnerabilities' or 'all' and
+      # does NOT reject anything else: an unknown value silently skips the
+      # gitleaks step and the job still ends green. This file passed 'full'
+      # until 2026-10, so gitleaks never scanned a single commit here.
+      # 'secrets' runs gitleaks only (Trivy has its own job below).
+      #
+      # Scope is decided by gitleaks-action from the event, not by this input:
+      # push and pull_request scan the new commits, schedule and
+      # workflow_dispatch scan the full history. The weekly schedule above is
+      # the full pass. Reviewed false positives live in .gitleaksignore.
+      scan-type: 'secrets'
       fail-on-findings: true
       # Recorded restic/docker JSON responses. They contain repository IDs and
       # snapshot hashes that look key-shaped to a scanner and are not secrets.

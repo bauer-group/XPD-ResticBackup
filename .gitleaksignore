@@ -1,0 +1,21 @@
+# =============================================================================
+# XPD-ResticBackup - reviewed gitleaks false positives
+# =============================================================================
+# One fingerprint per line: <commit>:<file>:<rule>:<line>. A fingerprint pins a
+# single finding in a single commit, so a NEW occurrence of the same string in
+# a later commit is still reported. That is intended: every entry here must be
+# reviewed individually, never added in bulk to make a red scan green.
+#
+# Prefer fixing the source (a placeholder shape from .gitleaks.toml) over an
+# entry here. These two predate the scanner actually running.
+# =============================================================================
+
+# tests/unit/restic_args.bats:45 - AWS_SECRET_ACCESS_KEY test value modelled on
+# the AWS documentation example key. It only exists to assert that no
+# credential ends up in the restic argv; it was never a real key.
+82829ab2971497613e42d3b46d0d7599ab0a9e51:tests/unit/restic_args.bats:generic-api-key:45
+
+# install.sh:75 - RESTIC_RELEASE_KEY_FPR, the public PGP fingerprint of the
+# restic release signing key (identical to share/restic/restic-release-key.fpr).
+# Public by definition.
+b62d93e23856497c5fb4e343a4495b66ad148714:install.sh:generic-api-key:75
